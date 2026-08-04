@@ -15,7 +15,6 @@ def run_agent(goal):
 
     while True:
 
-        # Ask the Planner
         planner = ask_planner(goal, context)
 
         thought = planner["thought"]
@@ -67,9 +66,13 @@ def run_agent(goal):
 
         elif action == "SEND_SLACK":
 
-            print("\n========== FAKE SLACK ==========\n")
+            print("\n==============================")
+            print("FAKE SLACK MESSAGE")
+            print("==============================\n")
+
             print(summary)
-            print("\n===============================\n")
+
+            print("\n==============================")
 
             observation = "Summary sent to Slack."
 
@@ -90,6 +93,10 @@ def run_agent(goal):
             })
 
             break
+
+        # --------------------------------------------------
+        # UNKNOWN ACTION
+        # --------------------------------------------------
 
         else:
 
@@ -115,4 +122,10 @@ def run_agent(goal):
 
         })
 
-    return loops
+    return {
+
+        "loops": loops,
+
+        "summary": summary
+
+    }
