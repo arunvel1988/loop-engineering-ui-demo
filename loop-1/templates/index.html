@@ -44,6 +44,26 @@ Summarize unread client emails">
 
     </button>
 
+    <br><br>
+
+    <div id="summary-container" style="display:none;">
+
+        <h2>AI Generated Email Summary</h2>
+
+        <div id="summary-box"
+             style="
+                border:1px solid #444;
+                border-radius:8px;
+                padding:20px;
+                background:#202020;
+                color:white;
+                white-space:pre-wrap;
+                margin-bottom:25px;
+             ">
+        </div>
+
+    </div>
+
     <div id="timeline">
 
     </div>
@@ -54,7 +74,7 @@ Summarize unread client emails">
 
 async function runAgent(){
 
-    let task=document.getElementById("task").value;
+    let task = document.getElementById("task").value;
 
     if(task.trim()==""){
 
@@ -64,11 +84,19 @@ async function runAgent(){
 
     }
 
-    let timeline=document.getElementById("timeline");
+    let timeline = document.getElementById("timeline");
+
+    let summaryContainer = document.getElementById("summary-container");
+
+    let summaryBox = document.getElementById("summary-box");
+
+    summaryContainer.style.display="none";
+
+    summaryBox.innerHTML="";
 
     timeline.innerHTML="<h2>Running Agent...</h2>";
 
-    const response=await fetch("/run",{
+    const response = await fetch("/run",{
 
         method:"POST",
 
@@ -86,7 +114,7 @@ async function runAgent(){
 
     });
 
-    const data=await response.json();
+    const data = await response.json();
 
     timeline.innerHTML="";
 
@@ -110,13 +138,13 @@ async function runAgent(){
 
             <div class="loop-title">
 
-                🔄 Loop ${i+1}
+                Loop ${i+1}
 
             </div>
 
             <div class="section">
 
-                <b>💭 Thought</b>
+                <b>Thought</b>
 
                 <br><br>
 
@@ -126,7 +154,7 @@ async function runAgent(){
 
             <div class="section">
 
-                <b>⚙ Action</b>
+                <b>Action</b>
 
                 <br><br>
 
@@ -136,7 +164,7 @@ async function runAgent(){
 
             <div class="section">
 
-                <b>📄 Observation</b>
+                <b>Observation</b>
 
                 <br><br>
 
@@ -147,6 +175,19 @@ async function runAgent(){
         `;
 
         timeline.appendChild(card);
+
+        /*
+           Show the AI summary immediately after
+           the SUMMARIZE step.
+        */
+
+        if(loop.action=="SUMMARIZE"){
+
+            summaryContainer.style.display="block";
+
+            summaryBox.innerHTML=data.summary;
+
+        }
 
         await sleep(1200);
 
