@@ -10,6 +10,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
+
     return render_template("index.html")
 
 
@@ -29,25 +30,37 @@ def run():
                 "message": "Task cannot be empty."
             }), 400
 
-        loops = run_agent(task)
+        result = run_agent(task)
 
         return jsonify({
+
             "success": True,
-            "loops": loops
+
+            "loops": result["loops"],
+
+            "summary": result["summary"]
+
         })
 
     except Exception as e:
 
         return jsonify({
+
             "success": False,
+
             "message": str(e)
+
         }), 500
 
 
 if __name__ == "__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=5000,
+
         debug=True
+
     )
