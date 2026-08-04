@@ -1,0 +1,77 @@
+sudo adduser arun
+
+sudo usermod -aG sudo arun
+######################################################
+sudo apt update -y
+sudo apt install ubuntu-desktop -y     # or "sudo apt install xubuntu-desktop -y" for lightweight
+sudo apt install xrdp -y
+sudo systemctl enable xrdp
+sudo systemctl start xrdp
+
+########################################
+# ligher than ubuntu-desktop#################
+sudo apt install xfce4 xfce4-goodies -y
+sudo apt install xubuntu-desktop -y
+###########################################################
+
+sudo nano /etc/ssh/sshd_config
+
+PasswordAuthentication yes
+PubkeyAuthentication yes
+
+sudo systemctl restart ssh
+
+
+###########################################
+# incase of file override ########################
+
+sudo grep -r "PasswordAuthentication" /etc/ssh/sshd_config.d/
+
+sudo nano /etc/ssh/sshd_config.d/60-cloudimg-settings.conf
+
+
+PasswordAuthentication yes
+
+
+sudo systemctl restart sshd
+
+############################################################
+sudo nano /etc/ssh/sshd_config
+
+ListenAddress 0.0.0.0
+
+sudo systemctl restart ssh
+#######################
+
+######### for gnome browser also ###########################
+
+
+sudo nano /etc/xrdp/startwm.sh
+
+# Start XFCE for RDP sessions
+startxfce4
+## as testuser #####
+echo "startxfce4" > ~/.xsession
+chmod +x ~/.xsession
+## as testuser #####
+
+sudo systemctl restart xrdp
+sudo systemctl status xrdp
+
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+
+sudo apt install ./google-chrome-stable_current_amd64.deb
+
+######################################
+
+    sudo apt update -y
+    sudo apt install build-essential -y
+
+    sudo apt install gcc-13 -y
+
+    sudo apt install linux-headers-$(uname -r)
+
+#################################################################
+ssh -L 5006:localhost:5006 arun@34.93.54.214
+
+#################################################################
