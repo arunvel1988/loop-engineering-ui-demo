@@ -13,9 +13,9 @@ MODEL = "qwen3:8b"
 PLANNER_PROMPT = """
 You are an AI Workflow Planner.
 
-You NEVER solve the user's goal directly.
+Your responsibility is ONLY to decide the NEXT action.
 
-Your ONLY responsibility is deciding the NEXT action.
+Never solve the user's request.
 
 Available Actions
 
@@ -27,39 +27,144 @@ DONE
 
 Workflow
 
-If emails are not read
--> READ_EMAILS
+1. If emails have not been read
+   -> READ_EMAILS
 
-If emails are read but not filtered
--> FILTER_EMAILS
+2. If emails are available but not filtered
+   -> FILTER_EMAILS
 
-If emails are filtered but not summarized
--> SUMMARIZE
+3. If emails are filtered but not summarized
+   -> SUMMARIZE
 
-If summary exists but not sent
--> SEND_SLACK
+4. If summary exists but not sent
+   -> SEND_SLACK
 
-If Slack notification already sent
--> DONE
+5. If Slack notification has already been sent
+   -> DONE
+
+--------------------------------------------------
+
+When choosing FILTER_EMAILS, determine how Python
+should filter the emails.
+
+Return any required filters inside an "arguments"
+object.
+
+Examples
+
+User:
+Show important emails
+
+Return
+
+{
+  "thought":"Need important emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{
+      "priority":"HIGH"
+  }
+}
+
+----------------------------
+
+User:
+Show least important emails
+
+Return
+
+{
+  "thought":"Need low priority emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{
+      "priority":"LOW"
+  }
+}
+
+----------------------------
+
+User:
+Show medium priority emails
+
+Return
+
+{
+  "thought":"Need medium priority emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{
+      "priority":"MEDIUM"
+  }
+}
+
+----------------------------
+
+User:
+Show invoice emails
+
+Return
+
+{
+  "thought":"Need invoice emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{
+      "keyword":"invoice"
+  }
+}
+
+----------------------------
+
+User:
+Show Microsoft emails
+
+Return
+
+{
+  "thought":"Need Microsoft emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{
+      "sender":"microsoft.com"
+  }
+}
+
+----------------------------
+
+User:
+Show unread AWS billing emails
+
+Return
+
+{
+  "thought":"Need AWS billing emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{
+      "sender":"amazon.com",
+      "keyword":"billing"
+  }
+}
+
+----------------------------
+
+If no filters are required, return
+
+{
+  "thought":"Need to filter emails.",
+  "action":"FILTER_EMAILS",
+  "arguments":{}
+}
+
+Always inspect BOTH
+
+- User Goal
+- Current Context
 
 Never repeat completed actions.
 
-Always read the Current Context.
-
 Return ONLY valid JSON.
 
-Example
+Do NOT use markdown.
 
-{
-    "thought":"Need unread emails.",
-    "action":"READ_EMAILS"
-}
+Do NOT explain anything.
 
-No markdown.
-
-No explanation.
-
-Only JSON.
+Return JSON only.
 """
 
 
@@ -70,7 +175,7 @@ Only JSON.
 def ask_planner(goal, context):
 
     prompt = f"""
-Goal
+User Goal
 
 {goal}
 
@@ -78,7 +183,9 @@ Current Context
 
 {json.dumps(context, indent=2)}
 
-What is the NEXT action?
+Decide ONLY the next action.
+
+Return JSON.
 """
 
     payload = {
@@ -119,29 +226,51 @@ What is the NEXT action?
     answer = answer.replace("```", "")
     answer = answer.strip()
 
-    return json.loads(answer)
+    planner = json.loads(answer)
+
+    # Ensure arguments always exists
+
+    if "arguments" not in planner:
+
+        planner["arguments"] = {}
+
+    return planner
 
 
 # ============================================================
-# SUMMARIZER
+# EMAIL SUMMARIZER
 # ============================================================
 
-def summarize_emails(emails):
+def summarize_emails(goal, emails):
 
     prompt = f"""
-You are an expert email assistant.
+You are an AI Email Assistant.
 
-Summarize the following emails.
+The user requested:
 
-Mention
+{goal}
 
-1. Important Emails
-2. Urgent Emails
-3. Action Items
-
-Emails
+Below are the emails selected by the workflow.
 
 {json.dumps(emails, indent=2)}
+
+Answer ONLY the user's request.
+
+Do not always talk about important emails.
+
+If the user requested:
+
+- least important emails
+- important emails
+- invoice emails
+- Microsoft emails
+- AWS emails
+- emails requiring action
+- emails requiring no action
+
+respond accordingly.
+
+Provide a clear and concise summary.
 """
 
     payload = {
@@ -149,6 +278,11 @@ Emails
         "model": MODEL,
 
         "messages": [
+
+            {
+                "role": "system",
+                "content": "You summarize emails according to the user's request."
+            },
 
             {
                 "role": "user",
