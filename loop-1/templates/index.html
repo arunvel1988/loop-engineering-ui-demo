@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Loop Engineering Demo</title>
+
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='style.css') }}">
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Loop Engineering Demo</h1>
+
+    <p class="subtitle">
+
+        Ollama Planner + Python Loop + Dummy Gmail
+
+    </p>
+
+    <textarea
+            id="task"
+            placeholder="Example:
+
+Summarize today's important emails
+
+or
+
+Summarize unread client emails">
+    </textarea>
+
+    <button onclick="runAgent()">
+
+        Run Agent
+
+    </button>
+
+    <div id="timeline">
+
+    </div>
+
+</div>
+
+<script>
+
+async function runAgent(){
+
+    let task=document.getElementById("task").value;
+
+    if(task.trim()==""){
+
+        alert("Please enter a task.");
+
+        return;
+
+    }
+
+    let timeline=document.getElementById("timeline");
+
+    timeline.innerHTML="<h2>Running Agent...</h2>";
+
+    const response=await fetch("/run",{
+
+        method:"POST",
+
+        headers:{
+
+            "Content-Type":"application/json"
+
+        },
+
+        body:JSON.stringify({
+
+            task:task
+
+        })
+
+    });
+
+    const data=await response.json();
+
+    timeline.innerHTML="";
+
+    if(!data.success){
+
+        timeline.innerHTML="<h2>"+data.message+"</h2>";
+
+        return;
+
+    }
+
+    for(let i=0;i<data.loops.length;i++){
+
+        let loop=data.loops[i];
+
+        let card=document.createElement("div");
+
+        card.className="loop-card";
+
+        card.innerHTML=`
+
+            <div class="loop-title">
+
+                🔄 Loop ${i+1}
+
+            </div>
+
+            <div class="section">
+
+                <b>💭 Thought</b>
+
+                <br><br>
+
+                ${loop.thought}
+
+            </div>
+
+            <div class="section">
+
+                <b>⚙ Action</b>
+
+                <br><br>
+
+                ${loop.action}
+
+            </div>
+
+            <div class="section">
+
+                <b>📄 Observation</b>
+
+                <br><br>
+
+                ${loop.observation}
+
+            </div>
+
+        `;
+
+        timeline.appendChild(card);
+
+        await sleep(1200);
+
+    }
+
+}
+
+function sleep(ms){
+
+    return new Promise(resolve=>setTimeout(resolve,ms));
+
+}
+
+</script>
+
+</body>
+
+</html>
