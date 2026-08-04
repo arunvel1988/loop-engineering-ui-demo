@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loop Engineering Demo</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <h1>Loop Engineering Demo</h1>
+
+        <p class="subtitle">
+            Powered by Ollama (Local LLM)
+        </p>
+
+        <textarea
+            id="task"
+            placeholder="Enter your task...
+Example:
+Summarize today's unread emails
+Explain Kubernetes
+Deploy Nginx using Docker"
+        ></textarea>
+
+        <button onclick="runAgent()">
+            Run Agent
+        </button>
+
+        <h2>Response</h2>
+
+        <pre id="result">
+Waiting for input...
+        </pre>
+
+    </div>
+
+    <script>
+
+        async function runAgent() {
+
+            const task = document.getElementById("task").value;
+
+            if (task.trim() === "") {
+                alert("Please enter a task.");
+                return;
+            }
+
+            document.getElementById("result").innerHTML = "⏳ Thinking...";
+
+            try {
+
+                const response = await fetch("/run", {
+
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        task: task
+                    })
+
+                });
+
+                const data = await response.json();
+
+                document.getElementById("result").innerHTML = data.response;
+
+            }
+            catch (err) {
+
+                document.getElementById("result").innerHTML =
+                    "Error:\n\n" + err;
+
+            }
+
+        }
+
+    </script>
+
+</body>
+
+</html>
