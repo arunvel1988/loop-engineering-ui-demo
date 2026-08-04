@@ -11,6 +11,8 @@ def run_agent(goal):
 
     emails = []
 
+    filtered_emails = []
+
     summary = ""
 
     while True:
@@ -19,6 +21,8 @@ def run_agent(goal):
 
         thought = planner["thought"]
         action = planner["action"]
+
+        arguments = planner.get("arguments", {})
 
         observation = ""
 
@@ -38,17 +42,56 @@ def run_agent(goal):
 
         elif action == "FILTER_EMAILS":
 
-            important = []
+            filtered_emails = emails
 
-            for email in emails:
+            priority = arguments.get("priority")
+            sender = arguments.get("sender")
+            keyword = arguments.get("keyword")
 
-                if email["priority"] in ["HIGH", "MEDIUM"]:
+            # Filter by Priority
+            if priority:
 
-                    important.append(email)
+                filtered_emails = [
 
-            emails = important
+                    email
 
-            observation = f"{len(emails)} important emails selected."
+                    for email in filtered_emails
+
+                    if email.get("priority", "").upper() == priority.upper()
+
+                ]
+
+            # Filter by Sender
+            if sender:
+
+                filtered_emails = [
+
+                    email
+
+                    for email in filtered_emails
+
+                    if sender.lower() in email.get("from", "").lower()
+
+                ]
+
+            # Filter by Keyword
+            if keyword:
+
+                filtered_emails = [
+
+                    email
+
+                    for email in filtered_emails
+
+                    if keyword.lower() in (
+                        email.get("subject", "") +
+                        " " +
+                        email.get("body", "")
+                    ).lower()
+
+                ]
+
+            observation = f"{len(filtered_emails)} emails matched the requested filter."
 
         # --------------------------------------------------
         # SUMMARIZE
@@ -56,7 +99,7 @@ def run_agent(goal):
 
         elif action == "SUMMARIZE":
 
-            summary = summarize_emails(emails)
+            summary = summarize_emails(goal, filtered_emails)
 
             observation = "Summary generated successfully."
 
@@ -68,11 +111,9 @@ def run_agent(goal):
 
             print("\n==============================")
             print("FAKE SLACK MESSAGE")
-            print("==============================\n")
-
+            print("==============================")
             print(summary)
-
-            print("\n==============================")
+            print("==============================\n")
 
             observation = "Summary sent to Slack."
 
@@ -88,19 +129,19 @@ def run_agent(goal):
 
                 "action": action,
 
-                "observation": "Workflow Completed"
+                "observation": "Workflow completed."
 
             })
 
             break
 
         # --------------------------------------------------
-        # UNKNOWN ACTION
+        # UNKNOWN
         # --------------------------------------------------
 
         else:
 
-            observation = "Unknown Action"
+            observation = "Unknown action returned by planner."
 
         # --------------------------------------------------
 
