@@ -1,4 +1,11 @@
-from dummy_mail import get_unread_emails
+#from dummy_mail import get_unread_emails
+from gmail_tools import (
+    get_unread_emails,
+    send_reply,
+    send_email,
+    trash_email,
+    mark_as_read,
+)
 from ollama_client import ask_planner
 from ollama_client import summarize_emails
 
