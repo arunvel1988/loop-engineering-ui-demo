@@ -68,7 +68,7 @@ def _get_service():
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
-            creds = run_local_server(port=8080, open_browser=False)
+            creds = flow.run_local_server(port=8080, open_browser=False)
         with open(TOKEN_FILE, "w") as token_file:
             token_file.write(creds.to_json())
 
