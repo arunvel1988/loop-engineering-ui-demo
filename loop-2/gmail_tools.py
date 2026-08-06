@@ -39,7 +39,10 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-SCOPES = ["https://mail.google.com/"]  # full Gmail access (read/send/modify/delete)
+SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.compose",
+]
 
 CREDENTIALS_FILE = "credentials.json"
 TOKEN_FILE = "token.json"
