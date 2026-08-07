@@ -232,6 +232,121 @@ def list_deployments(namespace=None, only_problems=False):
 
 
 # ============================================================
+# REMEDIATION (WRITE ACTIONS - these change real cluster state)
+# ============================================================
+
+def delete_pod(name, namespace):
+    """
+    Delete a pod. If it's managed by a Deployment/ReplicaSet/StatefulSet,
+    Kubernetes will automatically recreate it - this is the standard way
+    to 'restart' a pod. If it's a standalone pod (no controller), it will
+    just be gone. Does NOT fix config errors (bad image, bad command) -
+    it will just come back broken the same way.
+    """
+    v1, _ = _get_clients()
+    try:
+        v1.delete_namespaced_pod(name=name, namespace=namespace)
+        return f"Pod {namespace}/{name} deleted."
+    except client.exceptions.ApiException as e:
+        return f"Error deleting pod: {e.reason}"
+
+
+def restart_deployment(name, namespace):
+    """
+    Rolling-restart a deployment (equivalent to `kubectl rollout restart`).
+    Good for transient issues (stuck connection, memory leak). Does NOT
+    fix config errors - if the image/command is wrong, it will crash
+    again identically.
+    """
+    _, apps_v1 = _get_clients()
+    import datetime
+
+    body = {
+        "spec": {
+            "template": {
+                "metadata": {
+                    "annotations": {
+                        "kubectl.kubernetes.io/restartedAt": datetime.datetime.utcnow().isoformat()
+                    }
+                }
+            }
+        }
+    }
+    try:
+        apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+        return f"Deployment {namespace}/{name} restart triggered."
+    except client.exceptions.ApiException as e:
+        return f"Error restarting deployment: {e.reason}"
+
+
+def get_deployment_history(name, namespace):
+    """
+    List revision history for a deployment (its ReplicaSets), newest first.
+    Use this BEFORE rollback_deployment to see what revisions exist and
+    what image each one used - helps confirm rollback is the right fix.
+    """
+    _, apps_v1 = _get_clients()
+    try:
+        rs_list = apps_v1.list_namespaced_replica_set(
+            namespace,
+            label_selector=None,
+        )
+        history = []
+        for rs in rs_list.items:
+            owner = next(
+                (o for o in (rs.metadata.owner_references or []) if o.kind == "Deployment"),
+                None,
+            )
+            if not owner or owner.name != name:
+                continue
+            revision = rs.metadata.annotations.get("deployment.kubernetes.io/revision", "?")
+            images = [c.image for c in rs.spec.template.spec.containers]
+            history.append({
+                "revision": revision,
+                "replicaset": rs.metadata.name,
+                "images": images,
+                "replicas": rs.spec.replicas,
+            })
+        history.sort(key=lambda h: int(h["revision"]) if h["revision"].isdigit() else 0, reverse=True)
+        return history
+    except client.exceptions.ApiException as e:
+        return f"Error fetching history: {e.reason}"
+
+
+def rollback_deployment(name, namespace, to_revision=None):
+    """
+    Roll a deployment back to a previous revision (equivalent to
+    `kubectl rollout undo`). If to_revision is None, rolls back to the
+    immediately previous revision. This is the correct 'fix' for issues
+    caused by a bad deploy (wrong image tag, broken config change) -
+    unlike restart, it actually changes the pod spec back to a known-good
+    state instead of retrying the same broken one.
+    """
+    _, apps_v1 = _get_clients()
+
+    if to_revision is None:
+        history = get_deployment_history(name, namespace)
+        if isinstance(history, str) or len(history) < 2:
+            return "Cannot rollback: no previous revision found."
+        # history[0] is current, history[1] is previous
+        target = history[1]
+    else:
+        history = get_deployment_history(name, namespace)
+        target = next((h for h in history if h["revision"] == str(to_revision)), None)
+        if not target:
+            return f"Revision {to_revision} not found in history."
+
+    # Patch the deployment's pod template to match the target ReplicaSet's spec
+    try:
+        target_rs = apps_v1.read_namespaced_replica_set(target["replicaset"], namespace)
+        body = {"spec": {"template": target_rs.spec.template}}
+        apps_v1.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+        return f"Deployment {namespace}/{name} rolled back to revision {target['revision']} (images: {target['images']})."
+    except client.exceptions.ApiException as e:
+        return f"Error rolling back: {e.reason}"
+
+
+# ============================================================
 # RESOURCE USAGE (requires metrics-server)
 # ============================================================
 
