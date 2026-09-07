@@ -3,161 +3,75 @@ import psutil
 import subprocess
 
 
-# ============================================================
-# 1. SERVER HEALTH
-# ============================================================
-
 def check_server():
-    """
-    Check overall server health.
-    """
-
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
 
     return {
-        "hostname": os.uname().nodename,
-
-        "cpu_percent":
-            psutil.cpu_percent(interval=1),
-
-        "memory_percent":
-            memory.percent,
-
-        "memory_available_gb":
-            round(memory.available / (1024 ** 3), 2),
-
-        "disk_percent":
-            disk.percent,
-
-        "disk_free_gb":
-            round(disk.free / (1024 ** 3), 2)
+        "hostname": psutil.gethostname(),
+        "cpu_percent": psutil.cpu_percent(interval=1),
+        "memory_percent": memory.percent,
+        "memory_available_gb": round(memory.available / (1024 ** 3), 2),
+        "disk_percent": disk.percent,
+        "disk_free_gb": round(disk.free / (1024 ** 3), 2)
     }
 
 
-# ============================================================
-# 2. PROCESS INVESTIGATION
-# ============================================================
-
 def check_processes():
-    """
-    Find processes consuming high CPU or memory.
-    """
-
     processes = []
 
     for process in psutil.process_iter(
-        [
-            "pid",
-            "name",
-            "username",
-            "cpu_percent",
-            "memory_percent",
-            "status"
-        ]
+        ["pid", "name", "username", "cpu_percent", "memory_percent"]
     ):
-
         try:
-
             info = process.info
 
             processes.append({
-
-                "pid":
-                    info["pid"],
-
-                "name":
-                    info["name"],
-
-                "username":
-                    info["username"],
-
-                "cpu_percent":
-                    info["cpu_percent"],
-
-                "memory_percent":
-                    info["memory_percent"],
-
-                "status":
-                    info["status"]
+                "pid": info["pid"],
+                "name": info["name"],
+                "username": info["username"],
+                "cpu_percent": info["cpu_percent"],
+                "memory_percent": round(info["memory_percent"], 2)
             })
 
-        except (
-            psutil.NoSuchProcess,
-            psutil.AccessDenied
-        ):
-
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-
-    # Sort by CPU
-
     processes.sort(
-        key=lambda x: x["cpu_percent"] or 0,
+        key=lambda x: x["cpu_percent"],
         reverse=True
     )
 
+    return {
+        "processes": processes[:15]
+    }
 
-    return processes[:15]
-
-
-# ============================================================
-# 3. NETWORK PORT INVESTIGATION
-# ============================================================
 
 def check_ports():
-    """
-    Check listening TCP/UDP ports.
-    """
-
     ports = []
 
-    try:
-
-        connections = psutil.net_connections(
-            kind="inet"
-        )
-
-        for connection in connections:
-
-            if connection.status == "LISTEN":
+    for conn in psutil.net_connections(kind="inet"):
+        try:
+            if conn.status == psutil.CONN_LISTEN:
 
                 ports.append({
-
-                    "pid":
-                        connection.pid,
-
-                    "local_address":
-                        str(connection.laddr),
-
-                    "status":
-                        connection.status
+                    "ip": conn.laddr.ip,
+                    "port": conn.laddr.port,
+                    "pid": conn.pid
                 })
 
-    except psutil.AccessDenied:
+        except Exception:
+            continue
 
-        return {
-            "error":
-                "Permission denied while reading network connections"
-        }
+    return {
+        "listening_ports": ports
+    }
 
-
-    return ports
-
-
-# ============================================================
-# 4. DOCKER INVESTIGATION
-# ============================================================
 
 def check_docker():
-    """
-    Check Docker containers.
-    """
-
     try:
 
         result = subprocess.run(
-
             [
                 "docker",
                 "ps",
@@ -165,25 +79,15 @@ def check_docker():
                 "--format",
                 "{{json .}}"
             ],
-
             capture_output=True,
-
             text=True,
-
-            timeout=15
+            timeout=10
         )
 
-
         if result.returncode != 0:
-
             return {
-
-                "success": False,
-
-                "error":
-                    result.stderr
+                "error": result.stderr.strip()
             }
-
 
         containers = []
 
@@ -193,166 +97,102 @@ def check_docker():
 
                 containers.append(line)
 
-
         return {
-
-            "success": True,
-
-            "containers":
-                containers
+            "containers": containers
         }
-
 
     except Exception as e:
 
         return {
-
-            "success": False,
-
-            "error":
-                str(e)
+            "error": str(e)
         }
 
 
-# ============================================================
-# 5. TERMINATE PROCESS
-# ============================================================
-
 def terminate_process(pid):
-    """
-    Terminate a process.
-
-    Safety:
-    - PID 1 cannot be terminated.
-    - Process must belong to the same user running the agent.
-    """
 
     try:
-
         pid = int(pid)
 
-
-        # Safety protection
-
         if pid == 1:
-
             return {
-
                 "success": False,
-
-                "error":
-                    "Refusing to terminate PID 1"
+                "error": "Refusing to terminate PID 1."
             }
-
 
         process = psutil.Process(pid)
 
+        # Security check:
+        # Only allow terminating processes owned by the
+        # same user running the agent.
 
-        # Check owner
+        current_user = psutil.Process(os.getpid()).username()
+        target_user = process.username()
 
-        current_user = psutil.Process(
-            os.getpid()
-        ).username()
-
-        process_user = process.username()
-
-
-        if process_user != current_user:
+        if target_user != current_user:
 
             return {
-
                 "success": False,
-
-                "error":
-                    "Process belongs to another user"
+                "error": (
+                    f"Permission denied. Process belongs to "
+                    f"{target_user}, agent runs as {current_user}."
+                )
             }
-
 
         process_name = process.name()
 
-
-        # Graceful termination
-
         process.terminate()
 
-
         try:
-
             process.wait(timeout=5)
 
         except psutil.TimeoutExpired:
 
             process.kill()
-
             process.wait(timeout=5)
 
-
         return {
-
             "success": True,
-
-            "pid":
-                pid,
-
-            "process":
-                process_name,
-
-            "message":
-                f"Process {pid} terminated successfully"
+            "pid": pid,
+            "process": process_name,
+            "message": f"Process {process_name} (PID {pid}) terminated."
         }
-
 
     except psutil.NoSuchProcess:
 
         return {
-
             "success": False,
-
-            "error":
-                f"Process {pid} does not exist"
+            "error": f"Process PID {pid} does not exist."
         }
-
 
     except psutil.AccessDenied:
 
         return {
-
             "success": False,
-
-            "error":
-                "Permission denied"
+            "error": f"Access denied while terminating PID {pid}."
         }
-
 
     except Exception as e:
 
         return {
-
             "success": False,
-
-            "error":
-                str(e)
+            "error": str(e)
         }
 
 
-# ============================================================
+# ---------------------------------------------------------
 # TOOL REGISTRY
-# ============================================================
+# ---------------------------------------------------------
 
 TOOL_FUNCTIONS = {
 
-    "check_server":
-        check_server,
+    "check_server": check_server,
 
-    "check_processes":
-        check_processes,
+    "check_processes": check_processes,
 
-    "check_ports":
-        check_ports,
+    "check_ports": check_ports,
 
-    "check_docker":
-        check_docker,
+    "check_docker": check_docker,
 
-    "terminate_process":
-        terminate_process
+    "terminate_process": terminate_process
+
 }
