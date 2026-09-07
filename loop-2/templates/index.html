@@ -1,7 +1,9 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>DevOps Agent</title>
 
@@ -12,150 +14,139 @@
         }
 
         body {
-
             margin: 0;
-
             background: #0f1117;
-
             color: #e6e6e6;
-
-            font-family:
-                Arial,
-                sans-serif;
-
+            font-family: Arial, sans-serif;
         }
 
+        /* HEADER */
+
         .header {
-
             height: 65px;
-
             background: #171a21;
-
-            border-bottom:
-                1px solid #2a2f3a;
+            border-bottom: 1px solid #2a2f3a;
 
             display: flex;
-
             align-items: center;
 
             padding: 0 25px;
-
         }
 
         .title {
-
             font-size: 20px;
-
             font-weight: bold;
-
         }
 
         .status {
-
             margin-left: 20px;
-
             font-size: 13px;
-
             color: #8f98a8;
-
         }
+
+        /* MAIN */
 
         .container {
-
             max-width: 1000px;
-
             margin: auto;
 
-            height:
-                calc(100vh - 65px);
+            height: calc(100vh - 65px);
 
             display: flex;
-
             flex-direction: column;
-
         }
 
+        /* CHAT */
+
         #chat {
-
             flex: 1;
-
             overflow-y: auto;
-
             padding: 30px;
-
         }
 
         .message {
-
             margin-bottom: 20px;
 
-            padding: 15px 18px;
+            padding: 16px 18px;
 
             border-radius: 10px;
 
             line-height: 1.6;
 
             white-space: pre-wrap;
-
         }
 
         .user {
-
             background: #1d2633;
-
             margin-left: 20%;
-
         }
 
         .assistant {
-
             background: #171a21;
 
-            border:
-                1px solid #292f3a;
+            border: 1px solid #292f3a;
 
             margin-right: 10%;
-
         }
 
+        .loading {
+            color: #8f98a8;
+            font-style: italic;
+        }
+
+        /* APPROVAL */
+
         .approval {
+            margin: 20px 10% 25px 0;
 
-            margin: 20px 0;
+            padding: 22px;
 
-            padding: 20px;
-
-            border:
-                1px solid #8b5cf6;
+            border: 1px solid #8b5cf6;
 
             background: #191622;
 
-            border-radius: 10px;
-
+            border-radius: 12px;
         }
 
         .approval-title {
-
-            font-size: 18px;
-
+            font-size: 19px;
             font-weight: bold;
 
-            margin-bottom: 12px;
+            margin-bottom: 18px;
+        }
 
+        .approval-warning {
+            background: #241f2e;
+
+            padding: 12px;
+
+            border-radius: 7px;
+
+            margin-bottom: 18px;
+
+            color: #d5c9ff;
         }
 
         .approval-info {
+            line-height: 1.8;
 
-            margin-bottom: 15px;
-
-            color: #b9c0cc;
-
+            margin-bottom: 20px;
         }
 
-        button {
+        .label {
+            color: #8f98a8;
+        }
 
+        .value {
+            font-weight: bold;
+        }
+
+        /* BUTTONS */
+
+        button {
             border: none;
 
-            padding: 11px 18px;
+            padding: 12px 20px;
 
             border-radius: 7px;
 
@@ -163,41 +154,39 @@
 
             font-weight: bold;
 
+            font-size: 14px;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         .approve {
-
             background: #22c55e;
-
             color: #07130b;
 
             margin-right: 10px;
-
         }
 
         .reject {
-
             background: #ef4444;
-
             color: white;
-
         }
 
-        .input-area {
+        /* INPUT */
 
+        .input-area {
             padding: 20px;
 
-            border-top:
-                1px solid #2a2f3a;
+            border-top: 1px solid #2a2f3a;
 
             display: flex;
 
             gap: 10px;
-
         }
 
         textarea {
-
             flex: 1;
 
             resize: none;
@@ -208,8 +197,7 @@
 
             color: white;
 
-            border:
-                1px solid #303644;
+            border: 1px solid #303644;
 
             border-radius: 8px;
 
@@ -217,24 +205,19 @@
 
             font-size: 15px;
 
+            outline: none;
+        }
+
+        textarea:focus {
+            border-color: #4f46e5;
         }
 
         .send {
-
             background: #4f46e5;
 
             color: white;
 
             width: 90px;
-
-        }
-
-        .loading {
-
-            color: #8f98a8;
-
-            font-style: italic;
-
         }
 
     </style>
@@ -245,64 +228,70 @@
 <body>
 
 
-<div class="header">
+    <!-- HEADER -->
 
-    <div class="title">
-        VASS DevOps Agent
-    </div>
+    <div class="header">
 
-    <div class="status">
-        GPT-OSS 120B
-    </div>
+        <div class="title">
+            DevOps Agent
+        </div>
 
-</div>
-
-
-<div class="container">
-
-
-    <div id="chat"></div>
-
-
-    <div class="input-area">
-
-        <textarea
-            id="message"
-            placeholder="Ask the DevOps Agent to investigate..."
-        ></textarea>
-
-        <button
-            class="send"
-            onclick="sendMessage()"
-        >
-            Send
-        </button>
+        <div class="status">
+            GPT-OSS 120B
+        </div>
 
     </div>
 
 
-</div>
+    <!-- MAIN -->
+
+    <div class="container">
+
+
+        <div id="chat"></div>
+
+
+        <!-- INPUT -->
+
+        <div class="input-area">
+
+            <textarea
+                id="message"
+                placeholder="Ask the DevOps Agent to investigate..."
+            ></textarea>
+
+            <button
+                class="send"
+                onclick="sendMessage()"
+            >
+                Send
+            </button>
+
+        </div>
+
+
+    </div>
 
 
 <script>
 
 
+// =========================================================
+// ELEMENTS
+// =========================================================
+
 const chat =
     document.getElementById("chat");
-
 
 const messageInput =
     document.getElementById("message");
 
 
-// ---------------------------------------------------------
+// =========================================================
 // ADD MESSAGE
-// ---------------------------------------------------------
+// =========================================================
 
-function addMessage(
-    text,
-    type
-) {
+function addMessage(text, type) {
 
     const div =
         document.createElement("div");
@@ -322,23 +311,21 @@ function addMessage(
 }
 
 
-// ---------------------------------------------------------
+// =========================================================
 // SEND MESSAGE
-// ---------------------------------------------------------
+// =========================================================
 
 async function sendMessage() {
-
 
     const message =
         messageInput.value.trim();
 
-
     if (!message) {
-
         return;
-
     }
 
+
+    // USER MESSAGE
 
     addMessage(
         message,
@@ -349,6 +336,8 @@ async function sendMessage() {
     messageInput.value = "";
 
 
+    // LOADING
+
     const loading =
         addMessage(
             "Investigating...",
@@ -358,12 +347,10 @@ async function sendMessage() {
 
     try {
 
-
         const response =
             await fetch(
                 "/chat",
                 {
-
                     method: "POST",
 
                     headers: {
@@ -374,7 +361,6 @@ async function sendMessage() {
                     body: JSON.stringify({
                         message: message
                     })
-
                 }
             );
 
@@ -386,11 +372,12 @@ async function sendMessage() {
         loading.remove();
 
 
+        // ERROR
+
         if (data.error) {
 
             addMessage(
-                "Error: " +
-                data.error,
+                "Error: " + data.error,
                 "assistant"
             );
 
@@ -398,15 +385,15 @@ async function sendMessage() {
         }
 
 
+        // AGENT RESPONSE
+
         addMessage(
             data.response,
             "assistant"
         );
 
 
-        // -------------------------------------------------
-        // SHOW APPROVAL
-        // -------------------------------------------------
+        // APPROVAL REQUEST
 
         if (data.pending_action) {
 
@@ -417,7 +404,6 @@ async function sendMessage() {
 
         }
 
-
     }
 
     catch (error) {
@@ -425,8 +411,7 @@ async function sendMessage() {
         loading.remove();
 
         addMessage(
-            "Request failed: " +
-            error,
+            "Request failed: " + error,
             "assistant"
         );
 
@@ -435,15 +420,14 @@ async function sendMessage() {
 }
 
 
-// ---------------------------------------------------------
-// SHOW APPROVAL BOX
-// ---------------------------------------------------------
+// =========================================================
+// SHOW APPROVAL
+// =========================================================
 
 function showApproval(
     actionId,
     action
 ) {
-
 
     const box =
         document.createElement("div");
@@ -452,28 +436,70 @@ function showApproval(
         "approval";
 
 
+    const pid =
+        action.arguments.pid;
+
+
     box.innerHTML = `
 
         <div class="approval-title">
             Remediation Required
         </div>
 
-        <div class="approval-info">
+
+        <div class="approval-warning">
 
             The DevOps Agent has identified
             a remediation action.
 
-            <br><br>
-
-            <strong>Action:</strong>
-            ${action.description}
-
-            <br>
-
-            <strong>PID:</strong>
-            ${action.arguments.pid}
+            Human approval is required
+            before making the change.
 
         </div>
+
+
+        <div class="approval-info">
+
+            <div>
+
+                <span class="label">
+                    Action:
+                </span>
+
+                <span class="value">
+                    Terminate Process
+                </span>
+
+            </div>
+
+
+            <div>
+
+                <span class="label">
+                    Process:
+                </span>
+
+                <span class="value">
+                    ${action.description}
+                </span>
+
+            </div>
+
+
+            <div>
+
+                <span class="label">
+                    PID:
+                </span>
+
+                <span class="value">
+                    ${pid}
+                </span>
+
+            </div>
+
+        </div>
+
 
         <button
             class="approve"
@@ -481,6 +507,7 @@ function showApproval(
         >
             Approve & Execute
         </button>
+
 
         <button
             class="reject"
@@ -496,21 +523,20 @@ function showApproval(
 
     chat.scrollTop =
         chat.scrollHeight;
-
 }
 
 
-// ---------------------------------------------------------
+// =========================================================
 // APPROVE
-// ---------------------------------------------------------
+// =========================================================
 
 async function approveAction(
     actionId,
     button
 ) {
 
-
-    button.disabled = true;
+    button.disabled =
+        true;
 
     button.innerText =
         "Executing...";
@@ -518,12 +544,10 @@ async function approveAction(
 
     try {
 
-
         const response =
             await fetch(
                 "/approve",
                 {
-
                     method: "POST",
 
                     headers: {
@@ -532,12 +556,8 @@ async function approveAction(
                     },
 
                     body: JSON.stringify({
-
-                        action_id:
-                            actionId
-
+                        action_id: actionId
                     })
-
                 }
             );
 
@@ -546,12 +566,14 @@ async function approveAction(
             await response.json();
 
 
+        // SUCCESS
+
         if (data.success) {
 
             addMessage(
 
-                "Remediation executed successfully.\n\n"
-                +
+                "REMEDIATION EXECUTED\n\n" +
+
                 JSON.stringify(
                     data.result,
                     null,
@@ -559,7 +581,46 @@ async function approveAction(
                 ),
 
                 "assistant"
+            );
 
+
+            // VERIFICATION
+
+            addMessage(
+
+                "VERIFICATION\n\n" +
+
+                JSON.stringify(
+                    data.verification.server,
+                    null,
+                    2
+                ),
+
+                "assistant"
+            );
+
+
+            // TOP PROCESSES
+
+            const processes =
+                data.verification.processes;
+
+
+            const topProcesses =
+                processes.processes.slice(0, 5);
+
+
+            addMessage(
+
+                "Top processes after remediation:\n\n" +
+
+                JSON.stringify(
+                    topProcesses,
+                    null,
+                    2
+                ),
+
+                "assistant"
             );
 
         }
@@ -568,32 +629,34 @@ async function approveAction(
 
             addMessage(
 
-                "Remediation failed.\n\n"
-                +
+                "REMEDIATION FAILED\n\n" +
+
                 JSON.stringify(
-                    data.result || data,
+                    data,
                     null,
                     2
                 ),
 
                 "assistant"
-
             );
 
         }
 
 
-        button.parentElement.remove();
+        // REMOVE APPROVAL BOX
 
+        button.parentElement.remove();
 
     }
 
     catch (error) {
 
-        button.disabled = false;
+        button.disabled =
+            false;
 
         button.innerText =
             "Approve & Execute";
+
 
         addMessage(
 
@@ -601,7 +664,6 @@ async function approveAction(
             error,
 
             "assistant"
-
         );
 
     }
@@ -609,26 +671,24 @@ async function approveAction(
 }
 
 
-// ---------------------------------------------------------
+// =========================================================
 // REJECT
-// ---------------------------------------------------------
+// =========================================================
 
 async function rejectAction(
     actionId,
     button
 ) {
 
-
-    button.disabled = true;
+    button.disabled =
+        true;
 
 
     try {
 
-
         await fetch(
             "/reject",
             {
-
                 method: "POST",
 
                 headers: {
@@ -637,12 +697,8 @@ async function rejectAction(
                 },
 
                 body: JSON.stringify({
-
-                    action_id:
-                        actionId
-
+                    action_id: actionId
                 })
-
             }
         );
 
@@ -652,12 +708,11 @@ async function rejectAction(
 
         addMessage(
 
-            "Remediation rejected. No changes were made.",
+            "REMEDIATION REJECTED\n\n" +
+            "No changes were made to the server.",
 
             "assistant"
-
         );
-
 
     }
 
@@ -669,7 +724,6 @@ async function rejectAction(
             error,
 
             "assistant"
-
         );
 
     }
@@ -677,9 +731,9 @@ async function rejectAction(
 }
 
 
-// ---------------------------------------------------------
+// =========================================================
 // ENTER KEY
-// ---------------------------------------------------------
+// =========================================================
 
 messageInput.addEventListener(
     "keydown",
