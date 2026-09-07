@@ -1,329 +1,437 @@
-from gmail_tools import (
-    get_unread_emails,
-    send_reply,
-    send_email,
-    trash_email,
-    mark_as_read,
-)
-from ollama_client import ask_planner
-from ollama_client import summarize_emails
-from ollama_client import draft_reply
+from groq import Groq
+import json
+
+from tools import TOOL_FUNCTIONS
 
 
-def run_agent(goal):
+client = Groq()
 
-    context = []
+MODEL = "openai/gpt-oss-120b"
 
-    loops = []
 
-    emails = []
+# ============================================================
+# TOOL DEFINITIONS
+# ============================================================
 
-    filtered_emails = []
+TOOLS = [
 
-    summary = ""
+    {
+        "type": "function",
 
-    drafts = {}  # email_id -> drafted reply body, so SEND_REPLY can reuse it
+        "function": {
+
+            "name":
+                "check_server",
+
+            "description":
+                """
+                Check overall server health including
+                CPU usage, memory usage, disk usage,
+                hostname and available memory.
+
+                Use this when investigating server
+                performance or resource problems.
+                """,
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+            }
+        }
+    },
+
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name":
+                "check_processes",
+
+            "description":
+                """
+                Inspect running processes and identify
+                processes consuming high CPU or memory.
+
+                Use this when investigating high CPU,
+                high memory or server performance issues.
+                """,
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+            }
+        }
+    },
+
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name":
+                "check_ports",
+
+            "description":
+                """
+                Inspect network ports currently listening
+                on the server.
+
+                Use this when investigating network,
+                application availability or service issues.
+                """,
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+            }
+        }
+    },
+
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name":
+                "check_docker",
+
+            "description":
+                """
+                Inspect Docker containers and their
+                current status.
+
+                Use this when investigating container
+                or application problems.
+                """,
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+            }
+        }
+    },
+
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name":
+                "terminate_process",
+
+            "description":
+                """
+                TERMINATE a running process by PID.
+
+                This is a destructive remediation action.
+
+                NEVER call this automatically.
+
+                Only call this when the user has explicitly
+                approved terminating the specific PID.
+
+                The PID must have already been identified
+                as problematic during investigation.
+                """,
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {
+
+                    "pid": {
+
+                        "type":
+                            "integer",
+
+                        "description":
+                            "PID of the process to terminate"
+                    }
+                },
+
+                "required": [
+                    "pid"
+                ]
+            }
+        }
+    }
+]
+
+
+# ============================================================
+# SYSTEM PROMPT
+# ============================================================
+
+SYSTEM_PROMPT = """
+
+You are VASS DevOps Agent.
+
+You are an AI agent responsible for
+investigating infrastructure and
+application incidents.
+
+Your workflow is:
+
+OBSERVE
+INVESTIGATE
+ANALYZE
+IDENTIFY ROOT CAUSE
+RECOMMEND REMEDIATION
+VERIFY
+
+You have access to real infrastructure
+tools.
+
+IMPORTANT:
+
+Never invent infrastructure information.
+
+When investigating a problem, use tools
+to obtain real information.
+
+You can use multiple tools during a
+single investigation.
+
+For example, if the user reports that
+the server is slow:
+
+1. Check server health.
+2. Check running processes.
+3. Check Docker.
+4. Check network ports if necessary.
+5. Correlate the evidence.
+6. Identify the most likely root cause.
+7. Recommend remediation.
+
+REMEMBER:
+
+Observation tools can be executed whenever
+necessary.
+
+Remediation tools are different.
+
+NEVER execute a destructive remediation
+automatically.
+
+Before using terminate_process, the user
+must explicitly approve terminating that
+specific PID.
+
+If remediation is required but approval
+has not been given:
+
+DO NOT execute the remediation.
+
+Instead explain:
+
+- Root cause
+- Evidence
+- Recommended action
+- Risk
+- Exact action requiring approval
+
+After an approved remediation is executed,
+verify the result using observation tools.
+
+Be concise but provide enough technical
+evidence for a DevOps engineer.
+"""
+
+
+# ============================================================
+# AGENT
+# ============================================================
+
+def run_agent(task):
+
+    messages = [
+
+        {
+            "role":
+                "system",
+
+            "content":
+                SYSTEM_PROMPT
+        },
+
+        {
+            "role":
+                "user",
+
+            "content":
+                task
+        }
+    ]
+
+
+    # ========================================================
+    # AGENT LOOP
+    # ========================================================
 
     while True:
 
-        planner = ask_planner(goal, context)
+        response = client.chat.completions.create(
 
-        thought = planner["thought"]
-        action = planner["action"]
+            model=MODEL,
 
-        arguments = planner.get("arguments", {})
+            messages=messages,
 
-        observation = ""
+            tools=TOOLS,
 
-        # --------------------------------------------------
-        # READ EMAILS
-        # --------------------------------------------------
+            tool_choice="auto",
 
-        if action == "READ_EMAILS":
+            temperature=0.2,
 
-            emails = get_unread_emails()
+            max_completion_tokens=4096,
 
-            observation = f"{len(emails)} unread emails found."
+            reasoning_effort="medium"
+        )
 
-            if emails:
 
-                ids_preview = ", ".join(
-                    f"{e.get('id')}:{e.get('subject', '')[:30]}" for e in emails
-                )
+        message = response.choices[0].message
 
-                observation += f" IDs: [{ids_preview}]"
 
-        # --------------------------------------------------
-        # FILTER EMAILS
-        # --------------------------------------------------
+        # ====================================================
+        # NO TOOL CALL
+        # ====================================================
 
-        elif action == "FILTER_EMAILS":
+        if not message.tool_calls:
 
-            filtered_emails = emails
+            return {
 
-            priority = arguments.get("priority")
-            sender = arguments.get("sender")
-            keyword = arguments.get("keyword")
+                "response":
+                    message.content
+            }
 
-            # Filter by Priority
-            if priority:
 
-                filtered_emails = [
+        # ====================================================
+        # ADD MODEL MESSAGE
+        # ====================================================
 
-                    email
+        messages.append(message)
 
-                    for email in filtered_emails
 
-                    if email.get("priority", "").upper() == priority.upper()
+        # ====================================================
+        # EXECUTE REQUESTED TOOLS
+        # ====================================================
 
-                ]
+        for tool_call in message.tool_calls:
 
-            # Filter by Sender
-            if sender:
+            tool_name = tool_call.function.name
 
-                filtered_emails = [
 
-                    email
+            # -----------------------------------------------
+            # Find function
+            # -----------------------------------------------
 
-                    for email in filtered_emails
+            function = TOOL_FUNCTIONS.get(
+                tool_name
+            )
 
-                    if sender.lower() in email.get("from", "").lower()
 
-                ]
+            if function is None:
 
-            # Filter by Keyword
-            if keyword:
+                result = {
 
-                filtered_emails = [
+                    "success": False,
 
-                    email
-
-                    for email in filtered_emails
-
-                    if keyword.lower() in (
-                        email.get("subject", "") +
-                        " " +
-                        email.get("body", "")
-                    ).lower()
-
-                ]
-
-            observation = f"{len(filtered_emails)} emails matched the requested filter."
-
-            if filtered_emails:
-
-                ids_preview = ", ".join(
-                    f"{e.get('id')}:{e.get('subject', '')[:30]}" for e in filtered_emails
-                )
-
-                observation += f" IDs: [{ids_preview}]"
-
-        # --------------------------------------------------
-        # SUMMARIZE
-        # --------------------------------------------------
-
-        elif action == "SUMMARIZE":
-
-            summary = summarize_emails(goal, filtered_emails)
-
-            observation = "Summary generated successfully."
-
-        # --------------------------------------------------
-        # DRAFT REPLY  (generate text only, does not send)
-        # --------------------------------------------------
-
-        elif action == "DRAFT_REPLY":
-
-            email_id = arguments.get("email_id")
-            instructions = arguments.get("instructions", "")
-
-            pool = filtered_emails or emails
-
-            target = next((e for e in pool if str(e.get("id")) == str(email_id)), None)
-
-            if target is None:
-
-                observation = f"Could not find email with id={email_id!r} to draft a reply for."
+                    "error":
+                        f"Unknown tool: {tool_name}"
+                }
 
             else:
 
-                body = draft_reply(goal, target, instructions)
+                try:
 
-                drafts[str(email_id)] = body
+                    arguments = json.loads(
+                        tool_call.function.arguments
+                    )
 
-                preview = body[:120].replace("\n", " ")
+                except json.JSONDecodeError:
 
-                observation = (
-                    f"Draft reply created for email id={email_id} "
-                    f"(from {target.get('from')}). Preview: \"{preview}...\""
-                )
+                    arguments = {}
 
-        # --------------------------------------------------
-        # SEND REPLY  (actually sends; uses draft if present)
-        # --------------------------------------------------
 
-        elif action == "SEND_REPLY":
+                # -------------------------------------------
+                # REMEDIATION PROTECTION
+                # -------------------------------------------
 
-            email_id = arguments.get("email_id")
-            body = arguments.get("body") or drafts.get(str(email_id))
+                if tool_name == "terminate_process":
 
-            pool = filtered_emails or emails
+                    result = {
 
-            target = next((e for e in pool if str(e.get("id")) == str(email_id)), None)
+                        "success": False,
 
-            if target is None:
+                        "error":
+                            """
+                            Remediation requires explicit
+                            user approval.
 
-                observation = f"Could not find email with id={email_id!r} to reply to."
+                            The agent cannot automatically
+                            terminate processes.
+                            """
+                    }
 
-            elif not body:
+                else:
 
-                observation = (
-                    f"No draft or body available for email id={email_id}. "
-                    f"Run DRAFT_REPLY first or supply 'body' in arguments."
-                )
+                    # ---------------------------------------
+                    # OBSERVATION TOOL
+                    # ---------------------------------------
 
-            else:
+                    try:
 
-                send_reply(
-                    to=target.get("from"),
-                    subject="Re: " + target.get("subject", ""),
-                    body=body,
-                    in_reply_to=target.get("id"),
-                    thread_id=target.get("threadId"),
-                )
+                        result = function(
+                            **arguments
+                        )
 
-                observation = f"Reply sent to {target.get('from')} for email id={email_id}."
+                    except Exception as e:
 
-        # --------------------------------------------------
-        # SEND EMAIL  (brand-new email, not a reply)
-        # --------------------------------------------------
+                        result = {
 
-        elif action == "SEND_EMAIL":
+                            "success": False,
 
-            to = arguments.get("to")
-            subject = arguments.get("subject")
-            body = arguments.get("body")
+                            "error":
+                                str(e)
+                        }
 
-            if not to or not subject or not body:
 
-                observation = "SEND_EMAIL requires 'to', 'subject', and 'body' arguments."
+            # =================================================
+            # SEND TOOL RESULT BACK TO MODEL
+            # =================================================
 
-            else:
+            messages.append({
 
-                send_email(to=to, subject=subject, body=body)
+                "role":
+                    "tool",
 
-                observation = f"Email sent to {to} with subject '{subject}'."
+                "tool_call_id":
+                    tool_call.id,
 
-        # --------------------------------------------------
-        # TRASH EMAIL
-        # --------------------------------------------------
-
-        elif action == "TRASH_EMAIL":
-
-            email_id = arguments.get("email_id")
-
-            pool = filtered_emails or emails
-
-            target = next((e for e in pool if str(e.get("id")) == str(email_id)), None)
-
-            if target is None:
-
-                observation = f"Could not find email with id={email_id!r} to trash."
-
-            else:
-
-                trash_email(email_id)
-
-                observation = f"Email id={email_id} moved to Trash."
-
-        # --------------------------------------------------
-        # MARK AS READ
-        # --------------------------------------------------
-
-        elif action == "MARK_AS_READ":
-
-            email_id = arguments.get("email_id")
-
-            pool = filtered_emails or emails
-
-            target = next((e for e in pool if str(e.get("id")) == str(email_id)), None)
-
-            if target is None:
-
-                observation = f"Could not find email with id={email_id!r} to mark as read."
-
-            else:
-
-                mark_as_read(email_id)
-
-                observation = f"Email id={email_id} marked as read."
-
-        # --------------------------------------------------
-        # SEND SLACK
-        # --------------------------------------------------
-
-        elif action == "SEND_SLACK":
-
-            print("\n==============================")
-            print("FAKE SLACK MESSAGE")
-            print("==============================")
-            print(summary)
-            print("==============================\n")
-
-            observation = "Summary sent to Slack."
-
-        # --------------------------------------------------
-        # DONE
-        # --------------------------------------------------
-
-        elif action == "DONE":
-
-            loops.append({
-
-                "thought": thought,
-
-                "action": action,
-
-                "observation": "Workflow completed."
-
+                "content":
+                    json.dumps(
+                        result,
+                        default=str
+                    )
             })
-
-            break
-
-        # --------------------------------------------------
-        # UNKNOWN
-        # --------------------------------------------------
-
-        else:
-
-            observation = "Unknown action returned by planner."
-
-        # --------------------------------------------------
-
-        context.append({
-
-            "action": action,
-
-            "observation": observation
-
-        })
-
-        loops.append({
-
-            "thought": thought,
-
-            "action": action,
-
-            "observation": observation
-
-        })
-
-    return {
-
-        "loops": loops,
-
-        "summary": summary,
-
-        "drafts": drafts
-
-    }
