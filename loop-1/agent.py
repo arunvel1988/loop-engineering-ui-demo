@@ -1,172 +1,210 @@
-from dummy_mail import get_unread_emails
-from ollama_client import ask_planner
-from ollama_client import summarize_emails
+from groq import Groq
+import json
+
+from tools import (
+    check_server,
+    check_processes,
+    check_ports,
+    check_docker
+)
 
 
-def run_agent(goal):
+client = Groq()
 
-    context = []
+MODEL = "openai/gpt-oss-120b"
 
-    loops = []
 
-    emails = []
+TOOLS = [
 
-    filtered_emails = []
+    {
+        "type": "function",
 
-    summary = ""
+        "function": {
+
+            "name": "check_server",
+
+            "description":
+                "Check CPU, memory and disk usage.",
+
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_processes",
+
+            "description":
+                "Find processes consuming high CPU or memory.",
+
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_ports",
+
+            "description":
+                "Show network ports currently listening.",
+
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_docker",
+
+            "description":
+                "Show running Docker containers.",
+
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+]
+
+
+TOOL_FUNCTIONS = {
+
+    "check_server":
+        check_server,
+
+    "check_processes":
+        check_processes,
+
+    "check_ports":
+        check_ports,
+
+    "check_docker":
+        check_docker
+}
+
+
+def run_agent(task):
+
+    messages = [
+
+        {
+            "role": "system",
+
+            "content": """
+You are a DevOps Agent.
+
+You investigate infrastructure and
+application problems.
+
+Use the available tools to obtain
+real information from the server.
+
+Never invent infrastructure information.
+
+Use multiple tools when necessary.
+"""
+        },
+
+        {
+            "role": "user",
+
+            "content": task
+        }
+    ]
+
 
     while True:
 
-        planner = ask_planner(goal, context)
+        response = client.chat.completions.create(
 
-        thought = planner["thought"]
-        action = planner["action"]
+            model=MODEL,
 
-        arguments = planner.get("arguments", {})
+            messages=messages,
 
-        observation = ""
+            tools=TOOLS,
 
-        # --------------------------------------------------
-        # READ EMAILS
-        # --------------------------------------------------
+            tool_choice="auto",
 
-        if action == "READ_EMAILS":
+            temperature=0.2,
 
-            emails = get_unread_emails()
+            max_completion_tokens=2048,
 
-            observation = f"{len(emails)} unread emails found."
+            reasoning_effort="medium"
+        )
 
-        # --------------------------------------------------
-        # FILTER EMAILS
-        # --------------------------------------------------
 
-        elif action == "FILTER_EMAILS":
+        message = response.choices[0].message
 
-            filtered_emails = emails
 
-            priority = arguments.get("priority")
-            sender = arguments.get("sender")
-            keyword = arguments.get("keyword")
+        # =====================================
+        # MODEL FINISHED
+        # =====================================
 
-            # Filter by Priority
-            if priority:
+        if not message.tool_calls:
 
-                filtered_emails = [
+            return {
+                "response":
+                    message.content
+            }
 
-                    email
 
-                    for email in filtered_emails
+        # =====================================
+        # MODEL REQUESTED TOOL(S)
+        # =====================================
 
-                    if email.get("priority", "").upper() == priority.upper()
+        messages.append(message)
 
-                ]
 
-            # Filter by Sender
-            if sender:
+        for tool_call in message.tool_calls:
 
-                filtered_emails = [
+            name = tool_call.function.name
 
-                    email
+            function = TOOL_FUNCTIONS.get(name)
 
-                    for email in filtered_emails
 
-                    if sender.lower() in email.get("from", "").lower()
+            if function is None:
 
-                ]
+                result = {
+                    "error":
+                        f"Unknown tool: {name}"
+                }
 
-            # Filter by Keyword
-            if keyword:
+            else:
 
-                filtered_emails = [
+                result = function()
 
-                    email
 
-                    for email in filtered_emails
+            messages.append({
 
-                    if keyword.lower() in (
-                        email.get("subject", "") +
-                        " " +
-                        email.get("body", "")
-                    ).lower()
+                "role": "tool",
 
-                ]
+                "tool_call_id":
+                    tool_call.id,
 
-            observation = f"{len(filtered_emails)} emails matched the requested filter."
-
-        # --------------------------------------------------
-        # SUMMARIZE
-        # --------------------------------------------------
-
-        elif action == "SUMMARIZE":
-
-            summary = summarize_emails(goal, filtered_emails)
-
-            observation = "Summary generated successfully."
-
-        # --------------------------------------------------
-        # SEND SLACK
-        # --------------------------------------------------
-
-        elif action == "SEND_SLACK":
-
-            print("\n==============================")
-            print("FAKE SLACK MESSAGE")
-            print("==============================")
-            print(summary)
-            print("==============================\n")
-
-            observation = "Summary sent to Slack."
-
-        # --------------------------------------------------
-        # DONE
-        # --------------------------------------------------
-
-        elif action == "DONE":
-
-            loops.append({
-
-                "thought": thought,
-
-                "action": action,
-
-                "observation": "Workflow completed."
+                "content":
+                    json.dumps(result)
 
             })
-
-            break
-
-        # --------------------------------------------------
-        # UNKNOWN
-        # --------------------------------------------------
-
-        else:
-
-            observation = "Unknown action returned by planner."
-
-        # --------------------------------------------------
-
-        context.append({
-
-            "action": action,
-
-            "observation": observation
-
-        })
-
-        loops.append({
-
-            "thought": thought,
-
-            "action": action,
-
-            "observation": observation
-
-        })
-
-    return {
-
-        "loops": loops,
-
-        "summary": summary
-
-    }
