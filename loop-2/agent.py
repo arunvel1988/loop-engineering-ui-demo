@@ -1,5 +1,5 @@
-from groq import Groq
 import json
+from groq import Groq
 
 from tools import TOOL_FUNCTIONS
 
@@ -9,10 +9,6 @@ client = Groq()
 MODEL = "openai/gpt-oss-120b"
 
 
-# ============================================================
-# TOOL DEFINITIONS
-# ============================================================
-
 TOOLS = [
 
     {
@@ -20,18 +16,10 @@ TOOLS = [
 
         "function": {
 
-            "name":
-                "check_server",
+            "name": "check_server",
 
             "description":
-                """
-                Check overall server health including
-                CPU usage, memory usage, disk usage,
-                hostname and available memory.
-
-                Use this when investigating server
-                performance or resource problems.
-                """,
+                "Check CPU, memory and disk usage of the server.",
 
             "parameters": {
 
@@ -44,23 +32,15 @@ TOOLS = [
         }
     },
 
-
     {
         "type": "function",
 
         "function": {
 
-            "name":
-                "check_processes",
+            "name": "check_processes",
 
             "description":
-                """
-                Inspect running processes and identify
-                processes consuming high CPU or memory.
-
-                Use this when investigating high CPU,
-                high memory or server performance issues.
-                """,
+                "List the top processes sorted by CPU usage.",
 
             "parameters": {
 
@@ -73,23 +53,15 @@ TOOLS = [
         }
     },
 
-
     {
         "type": "function",
 
         "function": {
 
-            "name":
-                "check_ports",
+            "name": "check_ports",
 
             "description":
-                """
-                Inspect network ports currently listening
-                on the server.
-
-                Use this when investigating network,
-                application availability or service issues.
-                """,
+                "Check listening network ports on the server.",
 
             "parameters": {
 
@@ -102,23 +74,15 @@ TOOLS = [
         }
     },
 
-
     {
         "type": "function",
 
         "function": {
 
-            "name":
-                "check_docker",
+            "name": "check_docker",
 
             "description":
-                """
-                Inspect Docker containers and their
-                current status.
-
-                Use this when investigating container
-                or application problems.
-                """,
+                "Check Docker containers running on the server.",
 
             "parameters": {
 
@@ -131,29 +95,18 @@ TOOLS = [
         }
     },
 
-
     {
         "type": "function",
 
         "function": {
 
-            "name":
-                "terminate_process",
+            "name": "terminate_process",
 
             "description":
-                """
-                TERMINATE a running process by PID.
-
-                This is a destructive remediation action.
-
-                NEVER call this automatically.
-
-                Only call this when the user has explicitly
-                approved terminating the specific PID.
-
-                The PID must have already been identified
-                as problematic during investigation.
-                """,
+                "Terminate a specific process by PID. "
+                "This is a remediation action. "
+                "Never execute this automatically. "
+                "Request user approval first.",
 
             "parameters": {
 
@@ -162,133 +115,80 @@ TOOLS = [
                 "properties": {
 
                     "pid": {
-
-                        "type":
-                            "integer",
-
-                        "description":
-                            "PID of the process to terminate"
+                        "type": "integer",
+                        "description": "PID of the process to terminate."
                     }
+
                 },
 
-                "required": [
-                    "pid"
-                ]
+                "required": ["pid"]
             }
         }
     }
+
 ]
 
-
-# ============================================================
-# SYSTEM PROMPT
-# ============================================================
 
 SYSTEM_PROMPT = """
 
 You are VASS DevOps Agent.
 
-You are an AI agent responsible for
-investigating infrastructure and
-application incidents.
+You are an infrastructure investigation and remediation agent.
 
 Your workflow is:
 
-OBSERVE
-INVESTIGATE
-ANALYZE
-IDENTIFY ROOT CAUSE
-RECOMMEND REMEDIATION
-VERIFY
+1. OBSERVE
+2. INVESTIGATE
+3. ANALYZE
+4. IDENTIFY ROOT CAUSE
+5. RECOMMEND REMEDIATION
+6. VERIFY
 
-You have access to real infrastructure
-tools.
+Use tools to collect real infrastructure information.
 
-IMPORTANT:
+Never invent CPU, memory, process, Docker or port information.
 
-Never invent infrastructure information.
+Use multiple investigation tools when necessary.
 
-When investigating a problem, use tools
-to obtain real information.
+IMPORTANT REMEDIATION RULE:
 
-You can use multiple tools during a
-single investigation.
+terminate_process is a destructive remediation tool.
 
-For example, if the user reports that
-the server is slow:
+NEVER execute terminate_process automatically.
 
-1. Check server health.
-2. Check running processes.
-3. Check Docker.
-4. Check network ports if necessary.
-5. Correlate the evidence.
-6. Identify the most likely root cause.
-7. Recommend remediation.
+When you determine that a process should be terminated:
 
-REMEMBER:
+- identify the PID
+- explain why it should be terminated
+- request user approval
+- do NOT actually terminate it
 
-Observation tools can be executed whenever
-necessary.
+The application will handle the approval.
 
-Remediation tools are different.
+After a remediation has been approved and executed,
+investigate the system again to verify whether the incident
+has been resolved.
 
-NEVER execute a destructive remediation
-automatically.
-
-Before using terminate_process, the user
-must explicitly approve terminating that
-specific PID.
-
-If remediation is required but approval
-has not been given:
-
-DO NOT execute the remediation.
-
-Instead explain:
-
-- Root cause
-- Evidence
-- Recommended action
-- Risk
-- Exact action requiring approval
-
-After an approved remediation is executed,
-verify the result using observation tools.
-
-Be concise but provide enough technical
-evidence for a DevOps engineer.
 """
 
-
-# ============================================================
-# AGENT
-# ============================================================
 
 def run_agent(task):
 
     messages = [
 
         {
-            "role":
-                "system",
-
-            "content":
-                SYSTEM_PROMPT
+            "role": "system",
+            "content": SYSTEM_PROMPT
         },
 
         {
-            "role":
-                "user",
-
-            "content":
-                task
+            "role": "user",
+            "content": task
         }
+
     ]
 
-
-    # ========================================================
-    # AGENT LOOP
-    # ========================================================
+    pending_action = None
 
     while True:
 
@@ -307,104 +207,98 @@ def run_agent(task):
             max_completion_tokens=4096,
 
             reasoning_effort="medium"
-        )
 
+        )
 
         message = response.choices[0].message
 
-
-        # ====================================================
-        # NO TOOL CALL
-        # ====================================================
+        # -------------------------------------------------
+        # FINAL RESPONSE
+        # -------------------------------------------------
 
         if not message.tool_calls:
 
             return {
 
-                "response":
-                    message.content
+                "response": message.content,
+
+                "pending_action": pending_action
+
             }
 
-
-        # ====================================================
-        # ADD MODEL MESSAGE
-        # ====================================================
-
+        # Add assistant's tool request
         messages.append(message)
 
-
-        # ====================================================
-        # EXECUTE REQUESTED TOOLS
-        # ====================================================
+        # -------------------------------------------------
+        # TOOL EXECUTION
+        # -------------------------------------------------
 
         for tool_call in message.tool_calls:
 
             tool_name = tool_call.function.name
 
-
-            # -----------------------------------------------
-            # Find function
-            # -----------------------------------------------
-
-            function = TOOL_FUNCTIONS.get(
-                tool_name
+            arguments = json.loads(
+                tool_call.function.arguments
             )
 
+            # ---------------------------------------------
+            # REMEDIATION
+            # ---------------------------------------------
 
-            if function is None:
+            if tool_name == "terminate_process":
+
+                pid = arguments.get("pid")
+
+                pending_action = {
+
+                    "tool": "terminate_process",
+
+                    "arguments": {
+                        "pid": pid
+                    },
+
+                    "description":
+                        f"Terminate process PID {pid}"
+
+                }
 
                 result = {
 
                     "success": False,
 
-                    "error":
-                        f"Unknown tool: {tool_name}"
+                    "requires_approval": True,
+
+                    "pid": pid,
+
+                    "message":
+                        f"Termination of PID {pid} requires user approval."
+
                 }
+
+            # ---------------------------------------------
+            # NORMAL OBSERVATION TOOL
+            # ---------------------------------------------
 
             else:
 
-                try:
+                function = TOOL_FUNCTIONS.get(tool_name)
 
-                    arguments = json.loads(
-                        tool_call.function.arguments
-                    )
-
-                except json.JSONDecodeError:
-
-                    arguments = {}
-
-
-                # -------------------------------------------
-                # REMEDIATION PROTECTION
-                # -------------------------------------------
-
-                if tool_name == "terminate_process":
+                if not function:
 
                     result = {
 
                         "success": False,
 
                         "error":
-                            """
-                            Remediation requires explicit
-                            user approval.
+                            f"Unknown tool: {tool_name}"
 
-                            The agent cannot automatically
-                            terminate processes.
-                            """
                     }
 
                 else:
 
-                    # ---------------------------------------
-                    # OBSERVATION TOOL
-                    # ---------------------------------------
-
                     try:
 
-                        result = function(
-                            **arguments
-                        )
+                        result = function(**arguments)
 
                     except Exception as e:
 
@@ -412,26 +306,23 @@ def run_agent(task):
 
                             "success": False,
 
-                            "error":
-                                str(e)
+                            "error": str(e)
+
                         }
 
-
-            # =================================================
+            # ---------------------------------------------
             # SEND TOOL RESULT BACK TO MODEL
-            # =================================================
+            # ---------------------------------------------
 
             messages.append({
 
-                "role":
-                    "tool",
+                "role": "tool",
 
-                "tool_call_id":
-                    tool_call.id,
+                "tool_call_id": tool_call.id,
 
-                "content":
-                    json.dumps(
-                        result,
-                        default=str
-                    )
+                "content": json.dumps(
+                    result,
+                    default=str
+                )
+
             })
