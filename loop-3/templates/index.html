@@ -2,10 +2,16 @@
 <html lang="en">
 
 <head>
+
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
     <title>DevOps Agent</title>
+
 
     <style>
 
@@ -13,58 +19,177 @@
             box-sizing: border-box;
         }
 
+
         body {
+
             margin: 0;
+
             background: #0f1117;
+
             color: #e6e6e6;
+
             font-family: Arial, sans-serif;
         }
 
-        /* HEADER */
+
+        /* =====================================================
+           HEADER
+        ===================================================== */
 
         .header {
+
             height: 65px;
+
             background: #171a21;
+
             border-bottom: 1px solid #2a2f3a;
 
             display: flex;
+
             align-items: center;
 
             padding: 0 25px;
         }
 
+
         .title {
+
             font-size: 20px;
+
             font-weight: bold;
         }
 
+
         .status {
+
             margin-left: 20px;
+
             font-size: 13px;
+
             color: #8f98a8;
         }
 
-        /* MAIN */
 
-        .container {
-            max-width: 1000px;
-            margin: auto;
+        /* =====================================================
+           LAYOUT
+        ===================================================== */
 
-            height: calc(100vh - 65px);
+        .layout {
 
             display: flex;
+
+            height: calc(100vh - 65px);
+        }
+
+
+        /* =====================================================
+           SIDEBAR
+        ===================================================== */
+
+        .sidebar {
+
+            width: 220px;
+
+            background: #171a21;
+
+            border-right: 1px solid #2a2f3a;
+
+            padding: 20px;
+        }
+
+
+        .nav-title {
+
+            font-size: 12px;
+
+            color: #8f98a8;
+
+            text-transform: uppercase;
+
+            margin-bottom: 10px;
+        }
+
+
+        .nav-item {
+
+            padding: 13px 12px;
+
+            border-radius: 7px;
+
+            margin-bottom: 6px;
+
+            cursor: pointer;
+
+            color: #c8ced8;
+        }
+
+
+        .nav-item:hover {
+
+            background: #202531;
+        }
+
+
+        .nav-item.active {
+
+            background: #252b38;
+
+            color: white;
+
+            font-weight: bold;
+        }
+
+
+        .incident-count {
+
+            float: right;
+
+            background: #ef4444;
+
+            color: white;
+
+            border-radius: 20px;
+
+            padding: 2px 8px;
+
+            font-size: 11px;
+
+            font-weight: bold;
+        }
+
+
+        /* =====================================================
+           MAIN
+        ===================================================== */
+
+        .main {
+
+            flex: 1;
+
+            min-width: 0;
+
+            display: flex;
+
             flex-direction: column;
         }
 
-        /* CHAT */
+
+        /* =====================================================
+           CHAT
+        ===================================================== */
 
         #chat {
+
             flex: 1;
+
             overflow-y: auto;
+
             padding: 30px;
         }
 
+
         .message {
+
             margin-bottom: 20px;
 
             padding: 16px 18px;
@@ -76,12 +201,17 @@
             white-space: pre-wrap;
         }
 
+
         .user {
+
             background: #1d2633;
+
             margin-left: 20%;
         }
 
+
         .assistant {
+
             background: #171a21;
 
             border: 1px solid #292f3a;
@@ -89,14 +219,234 @@
             margin-right: 10%;
         }
 
+
         .loading {
+
             color: #8f98a8;
+
             font-style: italic;
         }
 
-        /* APPROVAL */
+
+        /* =====================================================
+           INCIDENT PANEL
+        ===================================================== */
+
+        #incidentPanel {
+
+            display: none;
+
+            flex: 1;
+
+            overflow-y: auto;
+
+            padding: 30px;
+        }
+
+
+        .incident-header {
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: center;
+
+            margin-bottom: 25px;
+        }
+
+
+        .incident-title {
+
+            font-size: 24px;
+
+            font-weight: bold;
+        }
+
+
+        .refresh-status {
+
+            color: #8f98a8;
+
+            font-size: 12px;
+        }
+
+
+        /* =====================================================
+           INCIDENT CARD
+        ===================================================== */
+
+        .incident-card {
+
+            background: #171a21;
+
+            border: 1px solid #292f3a;
+
+            border-radius: 12px;
+
+            padding: 22px;
+
+            margin-bottom: 15px;
+
+            cursor: pointer;
+        }
+
+
+        .incident-card:hover {
+
+            border-color: #4f46e5;
+        }
+
+
+        .incident-top {
+
+            display: flex;
+
+            justify-content: space-between;
+
+            align-items: center;
+
+            margin-bottom: 15px;
+        }
+
+
+        .incident-id {
+
+            font-size: 13px;
+
+            color: #8f98a8;
+        }
+
+
+        .incident-name {
+
+            font-size: 18px;
+
+            font-weight: bold;
+
+            margin-top: 5px;
+        }
+
+
+        .badge {
+
+            padding: 5px 10px;
+
+            border-radius: 20px;
+
+            font-size: 11px;
+
+            font-weight: bold;
+
+            text-transform: uppercase;
+        }
+
+
+        .badge-critical {
+
+            background: #451a1a;
+
+            color: #f87171;
+        }
+
+
+        .badge-warning {
+
+            background: #422006;
+
+            color: #fbbf24;
+        }
+
+
+        .badge-firing {
+
+            background: #451a1a;
+
+            color: #f87171;
+        }
+
+
+        .badge-resolved {
+
+            background: #14532d;
+
+            color: #4ade80;
+        }
+
+
+        .incident-info {
+
+            display: grid;
+
+            grid-template-columns:
+                repeat(3, 1fr);
+
+            gap: 15px;
+
+            margin-top: 18px;
+        }
+
+
+        .info-box {
+
+            background: #10131a;
+
+            padding: 12px;
+
+            border-radius: 8px;
+        }
+
+
+        .info-label {
+
+            color: #8f98a8;
+
+            font-size: 11px;
+
+            margin-bottom: 5px;
+        }
+
+
+        .info-value {
+
+            font-weight: bold;
+
+            font-size: 14px;
+        }
+
+
+        .incident-description {
+
+            margin-top: 18px;
+
+            color: #c8ced8;
+
+            line-height: 1.6;
+        }
+
+
+        .empty-incidents {
+
+            background: #171a21;
+
+            border: 1px solid #292f3a;
+
+            border-radius: 12px;
+
+            padding: 50px;
+
+            text-align: center;
+
+            color: #8f98a8;
+        }
+
+
+        /* =====================================================
+           APPROVAL
+        ===================================================== */
 
         .approval {
+
             margin: 20px 10% 25px 0;
 
             padding: 22px;
@@ -108,14 +458,19 @@
             border-radius: 12px;
         }
 
+
         .approval-title {
+
             font-size: 19px;
+
             font-weight: bold;
 
             margin-bottom: 18px;
         }
 
+
         .approval-warning {
+
             background: #241f2e;
 
             padding: 12px;
@@ -127,23 +482,33 @@
             color: #d5c9ff;
         }
 
+
         .approval-info {
+
             line-height: 1.8;
 
             margin-bottom: 20px;
         }
 
+
         .label {
+
             color: #8f98a8;
         }
 
+
         .value {
+
             font-weight: bold;
         }
 
-        /* BUTTONS */
+
+        /* =====================================================
+           BUTTONS
+        ===================================================== */
 
         button {
+
             border: none;
 
             padding: 12px 20px;
@@ -157,26 +522,39 @@
             font-size: 14px;
         }
 
+
         button:disabled {
+
             opacity: 0.5;
+
             cursor: not-allowed;
         }
 
+
         .approve {
+
             background: #22c55e;
+
             color: #07130b;
 
             margin-right: 10px;
         }
 
+
         .reject {
+
             background: #ef4444;
+
             color: white;
         }
 
-        /* INPUT */
+
+        /* =====================================================
+           INPUT
+        ===================================================== */
 
         .input-area {
+
             padding: 20px;
 
             border-top: 1px solid #2a2f3a;
@@ -186,7 +564,9 @@
             gap: 10px;
         }
 
+
         textarea {
+
             flex: 1;
 
             resize: none;
@@ -208,16 +588,39 @@
             outline: none;
         }
 
+
         textarea:focus {
+
             border-color: #4f46e5;
         }
 
+
         .send {
+
             background: #4f46e5;
 
             color: white;
 
             width: 90px;
+        }
+
+
+        /* =====================================================
+           RESPONSIVE
+        ===================================================== */
+
+        @media (max-width: 700px) {
+
+            .sidebar {
+
+                width: 170px;
+            }
+
+            .incident-info {
+
+                grid-template-columns: 1fr;
+            }
+
         }
 
     </style>
@@ -228,7 +631,9 @@
 <body>
 
 
-    <!-- HEADER -->
+    <!-- =====================================================
+         HEADER
+    ===================================================== -->
 
     <div class="header">
 
@@ -243,32 +648,125 @@
     </div>
 
 
-    <!-- MAIN -->
+    <!-- =====================================================
+         LAYOUT
+    ===================================================== -->
 
-    <div class="container">
+    <div class="layout">
 
 
-        <div id="chat"></div>
+        <!-- =================================================
+             SIDEBAR
+        ================================================= -->
+
+        <div class="sidebar">
+
+            <div class="nav-title">
+                Navigation
+            </div>
 
 
-        <!-- INPUT -->
-
-        <div class="input-area">
-
-            <textarea
-                id="message"
-                placeholder="Ask the DevOps Agent to investigate..."
-            ></textarea>
-
-            <button
-                class="send"
-                onclick="sendMessage()"
+            <div
+                id="chatNav"
+                class="nav-item active"
+                onclick="showChat()"
             >
-                Send
-            </button>
+                Chat
+            </div>
+
+
+            <div
+                id="incidentNav"
+                class="nav-item"
+                onclick="showIncidents()"
+            >
+
+                Incidents
+
+                <span
+                    id="incidentCount"
+                    class="incident-count"
+                    style="display:none;"
+                >
+                    0
+                </span>
+
+            </div>
 
         </div>
 
+
+        <!-- =================================================
+             MAIN
+        ================================================= -->
+
+        <div class="main">
+
+
+            <!-- =============================================
+                 CHAT
+            ============================================= -->
+
+            <div id="chat">
+
+            </div>
+
+
+            <!-- =============================================
+                 INCIDENT PANEL
+            ============================================= -->
+
+            <div id="incidentPanel">
+
+                <div class="incident-header">
+
+                    <div class="incident-title">
+                        Incidents
+                    </div>
+
+                    <div
+                        id="refreshStatus"
+                        class="refresh-status"
+                    >
+                        Checking for incidents...
+                    </div>
+
+                </div>
+
+
+                <div id="incidentList">
+
+                </div>
+
+            </div>
+
+
+            <!-- =============================================
+                 INPUT
+            ============================================= -->
+
+            <div
+                id="inputArea"
+                class="input-area"
+            >
+
+                <textarea
+                    id="message"
+                    placeholder="Ask the DevOps Agent to investigate..."
+                ></textarea>
+
+
+                <button
+                    class="send"
+                    onclick="sendMessage()"
+                >
+                    Send
+                </button>
+
+            </div>
+
+
+        </div>
 
     </div>
 
@@ -283,29 +781,123 @@
 const chat =
     document.getElementById("chat");
 
+
 const messageInput =
     document.getElementById("message");
 
 
+const incidentPanel =
+    document.getElementById("incidentPanel");
+
+
+const incidentList =
+    document.getElementById("incidentList");
+
+
+const incidentCount =
+    document.getElementById("incidentCount");
+
+
+const refreshStatus =
+    document.getElementById("refreshStatus");
+
+
+const inputArea =
+    document.getElementById("inputArea");
+
+
+const chatNav =
+    document.getElementById("chatNav");
+
+
+const incidentNav =
+    document.getElementById("incidentNav");
+
+
 // =========================================================
-// ADD MESSAGE
+// NAVIGATION
 // =========================================================
 
-function addMessage(text, type) {
+function showChat() {
+
+    chat.style.display =
+        "block";
+
+    incidentPanel.style.display =
+        "none";
+
+    inputArea.style.display =
+        "flex";
+
+
+    chatNav.classList.add(
+        "active"
+    );
+
+    incidentNav.classList.remove(
+        "active"
+    );
+
+}
+
+
+function showIncidents() {
+
+    chat.style.display =
+        "none";
+
+    incidentPanel.style.display =
+        "block";
+
+    inputArea.style.display =
+        "none";
+
+
+    incidentNav.classList.add(
+        "active"
+    );
+
+    chatNav.classList.remove(
+        "active"
+    );
+
+
+    loadIncidents();
+
+}
+
+
+// =========================================================
+// ADD CHAT MESSAGE
+// =========================================================
+
+function addMessage(
+    text,
+    type
+) {
 
     const div =
-        document.createElement("div");
+        document.createElement(
+            "div"
+        );
+
 
     div.className =
         "message " + type;
 
+
     div.innerText =
         text;
 
-    chat.appendChild(div);
+
+    chat.appendChild(
+        div
+    );
+
 
     chat.scrollTop =
         chat.scrollHeight;
+
 
     return div;
 }
@@ -320,12 +912,13 @@ async function sendMessage() {
     const message =
         messageInput.value.trim();
 
+
     if (!message) {
+
         return;
+
     }
 
-
-    // USER MESSAGE
 
     addMessage(
         message,
@@ -333,10 +926,9 @@ async function sendMessage() {
     );
 
 
-    messageInput.value = "";
+    messageInput.value =
+        "";
 
-
-    // LOADING
 
     const loading =
         addMessage(
@@ -351,16 +943,25 @@ async function sendMessage() {
             await fetch(
                 "/chat",
                 {
-                    method: "POST",
+
+                    method:
+                        "POST",
 
                     headers: {
+
                         "Content-Type":
                             "application/json"
+
                     },
 
-                    body: JSON.stringify({
-                        message: message
-                    })
+                    body:
+                        JSON.stringify({
+
+                            message:
+                                message
+
+                        })
+
                 }
             );
 
@@ -372,12 +973,11 @@ async function sendMessage() {
         loading.remove();
 
 
-        // ERROR
-
         if (data.error) {
 
             addMessage(
-                "Error: " + data.error,
+                "Error: " +
+                data.error,
                 "assistant"
             );
 
@@ -385,17 +985,15 @@ async function sendMessage() {
         }
 
 
-        // AGENT RESPONSE
-
         addMessage(
             data.response,
             "assistant"
         );
 
 
-        // APPROVAL REQUEST
-
-        if (data.pending_action) {
+        if (
+            data.pending_action
+        ) {
 
             showApproval(
                 data.action_id,
@@ -406,16 +1004,372 @@ async function sendMessage() {
 
     }
 
+
     catch (error) {
 
         loading.remove();
 
+
         addMessage(
-            "Request failed: " + error,
+            "Request failed: " +
+            error,
             "assistant"
         );
 
     }
+
+}
+
+
+// =========================================================
+// LOAD INCIDENTS
+// =========================================================
+
+async function loadIncidents() {
+
+    try {
+
+        const response =
+            await fetch(
+                "/incidents"
+            );
+
+
+        const data =
+            await response.json();
+
+
+        if (!data.success) {
+
+            return;
+
+        }
+
+
+        const incidents =
+            data.incidents || [];
+
+
+        updateIncidentCount(
+            incidents
+        );
+
+
+        renderIncidents(
+            incidents
+        );
+
+
+        refreshStatus.innerText =
+            "Updated just now";
+
+    }
+
+
+    catch (error) {
+
+        refreshStatus.innerText =
+            "Unable to load incidents";
+
+        console.error(
+            error
+        );
+
+    }
+
+}
+
+
+// =========================================================
+// INCIDENT COUNT
+// =========================================================
+
+function updateIncidentCount(
+    incidents
+) {
+
+    const activeIncidents =
+        incidents.filter(
+            incident =>
+                incident.status ===
+                "firing"
+        ).length;
+
+
+    if (
+        activeIncidents > 0
+    ) {
+
+        incidentCount.style.display =
+            "inline-block";
+
+
+        incidentCount.innerText =
+            activeIncidents;
+
+    }
+
+    else {
+
+        incidentCount.style.display =
+            "none";
+
+    }
+
+}
+
+
+// =========================================================
+// RENDER INCIDENTS
+// =========================================================
+
+function renderIncidents(
+    incidents
+) {
+
+    incidentList.innerHTML =
+        "";
+
+
+    if (
+        incidents.length === 0
+    ) {
+
+        incidentList.innerHTML = `
+
+            <div class="empty-incidents">
+
+                No incidents detected.
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    // Newest first
+
+    incidents
+        .slice()
+        .reverse()
+        .forEach(
+            incident => {
+
+                const card =
+                    document.createElement(
+                        "div"
+                    );
+
+
+                card.className =
+                    "incident-card";
+
+
+                const severity =
+                    incident.severity ||
+                    "unknown";
+
+
+                const status =
+                    incident.status ||
+                    "unknown";
+
+
+                let badgeClass =
+                    "badge-warning";
+
+
+                if (
+                    severity ===
+                    "critical"
+                ) {
+
+                    badgeClass =
+                        "badge-critical";
+
+                }
+
+
+                if (
+                    status ===
+                    "resolved"
+                ) {
+
+                    badgeClass =
+                        "badge-resolved";
+
+                }
+
+
+                card.innerHTML = `
+
+                    <div class="incident-top">
+
+                        <div>
+
+                            <div class="incident-id">
+
+                                ${escapeHtml(
+                                    incident.id
+                                )}
+
+                            </div>
+
+                            <div class="incident-name">
+
+                                ${escapeHtml(
+                                    incident.summary ||
+                                    incident.alertname
+                                )}
+
+                            </div>
+
+                        </div>
+
+
+                        <div>
+
+                            <span
+                                class="badge ${badgeClass}"
+                            >
+
+                                ${escapeHtml(
+                                    status
+                                )}
+
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="incident-description">
+
+                        ${escapeHtml(
+                            incident.description ||
+                            "No description available."
+                        )}
+
+                    </div>
+
+
+                    <div class="incident-info">
+
+
+                        <div class="info-box">
+
+                            <div class="info-label">
+                                Alert
+                            </div>
+
+                            <div class="info-value">
+
+                                ${escapeHtml(
+                                    incident.alertname
+                                )}
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="info-box">
+
+                            <div class="info-label">
+                                Severity
+                            </div>
+
+                            <div class="info-value">
+
+                                ${escapeHtml(
+                                    severity
+                                )}
+
+                            </div>
+
+                        </div>
+
+
+                        <div class="info-box">
+
+                            <div class="info-label">
+                                Instance
+                            </div>
+
+                            <div class="info-value">
+
+                                ${escapeHtml(
+                                    incident.instance
+                                )}
+
+                            </div>
+
+                        </div>
+
+
+                    </div>
+
+                `;
+
+
+                incidentList.appendChild(
+                    card
+                );
+
+            }
+        );
+
+}
+
+
+// =========================================================
+// HTML ESCAPE
+// =========================================================
+
+function escapeHtml(
+    value
+) {
+
+    if (
+        value === null ||
+        value === undefined
+    ) {
+
+        return "";
+
+    }
+
+
+    return String(value)
+
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+
+        .replace(
+            /</g,
+            "&lt;"
+        )
+
+        .replace(
+            />/g,
+            "&gt;"
+        )
+
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+
+        .replace(
+            /'/g,
+            "&#039;"
+        );
 
 }
 
@@ -430,7 +1384,10 @@ function showApproval(
 ) {
 
     const box =
-        document.createElement("div");
+        document.createElement(
+            "div"
+        );
+
 
     box.className =
         "approval";
@@ -443,7 +1400,9 @@ function showApproval(
     box.innerHTML = `
 
         <div class="approval-title">
+
             Remediation Required
+
         </div>
 
 
@@ -480,7 +1439,9 @@ function showApproval(
                 </span>
 
                 <span class="value">
-                    ${action.description}
+                    ${escapeHtml(
+                        action.description
+                    )}
                 </span>
 
             </div>
@@ -503,7 +1464,10 @@ function showApproval(
 
         <button
             class="approve"
-            onclick="approveAction('${actionId}', this)"
+            onclick="approveAction(
+                '${actionId}',
+                this
+            )"
         >
             Approve & Execute
         </button>
@@ -511,7 +1475,10 @@ function showApproval(
 
         <button
             class="reject"
-            onclick="rejectAction('${actionId}', this)"
+            onclick="rejectAction(
+                '${actionId}',
+                this
+            )"
         >
             Reject
         </button>
@@ -519,10 +1486,14 @@ function showApproval(
     `;
 
 
-    chat.appendChild(box);
+    chat.appendChild(
+        box
+    );
+
 
     chat.scrollTop =
         chat.scrollHeight;
+
 }
 
 
@@ -538,6 +1509,7 @@ async function approveAction(
     button.disabled =
         true;
 
+
     button.innerText =
         "Executing...";
 
@@ -548,16 +1520,25 @@ async function approveAction(
             await fetch(
                 "/approve",
                 {
-                    method: "POST",
+
+                    method:
+                        "POST",
 
                     headers: {
+
                         "Content-Type":
                             "application/json"
+
                     },
 
-                    body: JSON.stringify({
-                        action_id: actionId
-                    })
+                    body:
+                        JSON.stringify({
+
+                            action_id:
+                                actionId
+
+                        })
+
                 }
             );
 
@@ -566,9 +1547,9 @@ async function approveAction(
             await response.json();
 
 
-        // SUCCESS
-
-        if (data.success) {
+        if (
+            data.success
+        ) {
 
             addMessage(
 
@@ -581,10 +1562,9 @@ async function approveAction(
                 ),
 
                 "assistant"
+
             );
 
-
-            // VERIFICATION
 
             addMessage(
 
@@ -597,17 +1577,21 @@ async function approveAction(
                 ),
 
                 "assistant"
+
             );
 
 
-            // TOP PROCESSES
-
             const processes =
-                data.verification.processes;
+                data.verification
+                    .processes;
 
 
             const topProcesses =
-                processes.processes.slice(0, 5);
+                processes.processes
+                    .slice(
+                        0,
+                        5
+                    );
 
 
             addMessage(
@@ -621,6 +1605,7 @@ async function approveAction(
                 ),
 
                 "assistant"
+
             );
 
         }
@@ -638,21 +1623,22 @@ async function approveAction(
                 ),
 
                 "assistant"
+
             );
 
         }
 
 
-        // REMOVE APPROVAL BOX
-
         button.parentElement.remove();
 
     }
+
 
     catch (error) {
 
         button.disabled =
             false;
+
 
         button.innerText =
             "Approve & Execute";
@@ -664,6 +1650,7 @@ async function approveAction(
             error,
 
             "assistant"
+
         );
 
     }
@@ -689,16 +1676,25 @@ async function rejectAction(
         await fetch(
             "/reject",
             {
-                method: "POST",
+
+                method:
+                    "POST",
 
                 headers: {
+
                     "Content-Type":
                         "application/json"
+
                 },
 
-                body: JSON.stringify({
-                    action_id: actionId
-                })
+                body:
+                    JSON.stringify({
+
+                        action_id:
+                            actionId
+
+                    })
+
             }
         );
 
@@ -712,9 +1708,11 @@ async function rejectAction(
             "No changes were made to the server.",
 
             "assistant"
+
         );
 
     }
+
 
     catch (error) {
 
@@ -724,6 +1722,7 @@ async function rejectAction(
             error,
 
             "assistant"
+
         );
 
     }
@@ -754,8 +1753,37 @@ messageInput.addEventListener(
 );
 
 
-</script>
+// =========================================================
+// AUTOMATIC INCIDENT REFRESH
+// =========================================================
+//
+// Check the backend every 5 seconds.
+//
+// This means:
+//
+// Alertmanager
+//      ↓
+// Flask
+//      ↓
+// incidents dictionary
+//      ↓
+// Browser checks /incidents
+//      ↓
+// Incident appears automatically
+//
 
+setInterval(
+    loadIncidents,
+    5000
+);
+
+
+// Initial load
+
+loadIncidents();
+
+
+</script>
 
 </body>
 
