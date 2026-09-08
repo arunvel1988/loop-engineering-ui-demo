@@ -4,6 +4,7 @@ from groq import Groq
 
 from tools import TOOL_FUNCTIONS
 from memory import save_memory, search_memory
+from rag import search_knowledge
 
 
 # ============================================================
@@ -30,6 +31,12 @@ MAX_LONG_TERM_MEMORIES = 3
 
 # Maximum durable memories created from one interaction.
 MAX_NEW_MEMORIES = 3
+
+# Maximum RAG knowledge chunks retrieved for one request.
+MAX_RAG_RESULTS = 2
+
+# Keep retrieved knowledge compact to protect Groq TPM.
+MAX_RAG_CHUNK_CHARS = 1800
 
 
 # ============================================================
@@ -374,7 +381,52 @@ not necessarily the application name.
 
 
 ===========================================================
-4. CURRENT TELEMETRY
+4. RAG / DEVOPS KNOWLEDGE
+===========================================================
+
+You may receive relevant knowledge retrieved from the DevOps
+knowledge base. The knowledge base contains PDF documentation
+about Docker, Linux and DevOps troubleshooting.
+
+Use this knowledge as GENERAL OPERATIONAL GUIDANCE.
+
+IMPORTANT:
+
+RAG knowledge is documentation. It is NOT live infrastructure
+telemetry.
+
+For example, if the retrieved knowledge says:
+
+"Use ps aux --sort=-%cpu to find CPU-intensive processes."
+
+and the user asks:
+
+"Which process is using the most CPU right now?"
+
+you MUST call check_processes because the actual answer requires
+current server information.
+
+If the user asks:
+
+"How do I investigate high CPU on Linux?"
+
+use the retrieved Linux knowledge to explain the procedure.
+
+When RAG knowledge and current tool output are both available:
+
+- Use RAG for procedures, concepts and troubleshooting guidance.
+- Use live tools for current infrastructure facts.
+- Never invent live values from documentation.
+- Never treat documentation as proof of the current root cause.
+- If live telemetry conflicts with documentation, trust the live
+  telemetry for the current incident.
+
+The retrieved knowledge may also help you decide which
+infrastructure tool should be called next.
+
+
+===========================================================
+5. CURRENT TELEMETRY
 ===========================================================
 
 Use current infrastructure tools to collect real data.
@@ -428,7 +480,7 @@ check_ports
 
 
 ===========================================================
-5. INVESTIGATION WORKFLOW
+6. INVESTIGATION WORKFLOW
 ===========================================================
 
 For infrastructure incidents:
@@ -443,7 +495,7 @@ For infrastructure incidents:
 
 
 ===========================================================
-6. AVAILABLE TOOLS
+7. AVAILABLE TOOLS
 ===========================================================
 
 Current infrastructure:
@@ -463,7 +515,7 @@ Remediation:
 
 
 ===========================================================
-7. CPU INCIDENT
+8. CPU INCIDENT
 ===========================================================
 
 If server CPU is significantly elevated and a process is
@@ -477,7 +529,7 @@ root cause.
 
 
 ===========================================================
-8. HISTORICAL INCIDENT MEMORY
+9. HISTORICAL INCIDENT MEMORY
 ===========================================================
 
 Previous incidents are historical operational evidence.
@@ -493,7 +545,7 @@ trust current telemetry.
 
 
 ===========================================================
-9. ROOT CAUSE
+10. ROOT CAUSE
 ===========================================================
 
 Only identify a root cause when evidence supports it.
@@ -505,7 +557,7 @@ available telemetry."
 
 
 ===========================================================
-10. REMEDIATION
+11. REMEDIATION
 ===========================================================
 
 terminate_process is destructive.
@@ -527,7 +579,7 @@ Never invent a PID.
 
 
 ===========================================================
-11. LONG-TERM MEMORY SAFETY
+12. LONG-TERM MEMORY SAFETY
 ===========================================================
 
 Not every conversation message should become memory.
@@ -560,7 +612,7 @@ Do NOT remember:
 
 
 ===========================================================
-12. RESPONSE FORMAT
+13. RESPONSE FORMAT
 ===========================================================
 
 For infrastructure investigations use:
@@ -932,6 +984,118 @@ def store_long_term_memories(
 
 
 # ============================================================
+# RAG KNOWLEDGE SEARCH
+# ============================================================
+
+def get_rag_knowledge(task):
+    """
+    Search the DevOps knowledge base for documentation relevant
+    to the current request.
+
+    This retrieves knowledge from the PDF documents ingested into
+    ChromaDB by rag_ingest.py.
+
+    RAG provides documentation and troubleshooting guidance.
+    It does NOT provide live infrastructure state.
+    """
+
+    try:
+
+        results = search_knowledge(
+            query=task,
+            limit=MAX_RAG_RESULTS
+        )
+
+        if not results:
+            return []
+
+        return results
+
+    except Exception as e:
+
+        print(
+            f"[RAG] Knowledge search failed: {e}"
+        )
+
+        return []
+
+
+# ============================================================
+# BUILD RAG CONTEXT
+# ============================================================
+
+def build_rag_context(results):
+    """
+    Convert retrieved ChromaDB results into a compact context
+    block for GPT-OSS.
+    """
+
+    if not results:
+        return ""
+
+    lines = [
+        "===========================================================",
+        "RELEVANT DEVOPS KNOWLEDGE (RAG)",
+        "===========================================================",
+        "",
+        "The following information was retrieved from the DevOps",
+        "knowledge base PDFs.",
+        "",
+        "Use it as documentation and troubleshooting guidance.",
+        "Do not treat it as live infrastructure telemetry.",
+        "",
+    ]
+
+    for index, item in enumerate(
+        results,
+        start=1
+    ):
+
+        content = item.get(
+            "content",
+            ""
+        )
+
+        if not content:
+            continue
+
+        if len(content) > MAX_RAG_CHUNK_CHARS:
+            content = (
+                content[:MAX_RAG_CHUNK_CHARS]
+                + "..."
+            )
+
+        source = item.get(
+            "source",
+            "unknown"
+        )
+
+        page = item.get(
+            "page",
+            "unknown"
+        )
+
+        distance = item.get(
+            "distance"
+        )
+
+        if isinstance(distance, (int, float)):
+            distance_text = f"{distance:.4f}"
+        else:
+            distance_text = "unknown"
+
+        lines.append(
+            f"SOURCE {index}: {source}, page {page}, "
+            f"distance {distance_text}"
+        )
+        lines.append("")
+        lines.append(content)
+        lines.append("")
+
+    return "\\n".join(lines)
+
+
+# ============================================================
 # MAIN AGENT
 # ============================================================
 
@@ -945,6 +1109,7 @@ def run_agent(
 
     - short-term conversation memory
     - long-term ChromaDB memory
+    - RAG knowledge from PDF documents
     - DevOps tools
     - human-approved remediation
     """
@@ -975,6 +1140,28 @@ def run_agent(
             {
                 "role": "system",
                 "content": memory_context
+            }
+        )
+
+
+    # ========================================================
+    # RAG KNOWLEDGE
+    # ========================================================
+
+    rag_results = get_rag_knowledge(
+        task
+    )
+
+    rag_context = build_rag_context(
+        rag_results
+    )
+
+    if rag_context:
+
+        messages.append(
+            {
+                "role": "system",
+                "content": rag_context
             }
         )
 
