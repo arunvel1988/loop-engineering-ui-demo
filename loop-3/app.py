@@ -25,6 +25,34 @@ pending_actions = {}
 
 
 # =========================================================
+# INCIDENTS
+# =========================================================
+
+# Temporary in-memory incident store.
+#
+# Later we can replace this with a database or Redis.
+#
+# Example:
+#
+# {
+#     "INC-0001": {
+#         "id": "INC-0001",
+#         "alertname": "HighCPU",
+#         "status": "firing",
+#         "severity": "critical",
+#         "instance": "node-exporter:9100",
+#         "summary": "High CPU detected",
+#         "description": "...",
+#         "raw_alert": {...}
+#     }
+# }
+
+incidents = {}
+
+incident_counter = 0
+
+
+# =========================================================
 # HOME
 # =========================================================
 
@@ -70,7 +98,9 @@ def chat():
         # Run Agent
         # -------------------------------------------------
 
-        result = run_agent(message)
+        result = run_agent(
+            message
+        )
 
 
         # -------------------------------------------------
@@ -78,7 +108,9 @@ def chat():
         # -------------------------------------------------
 
         pending_action = (
-            result.get("pending_action")
+            result.get(
+                "pending_action"
+            )
         )
 
 
@@ -89,20 +121,24 @@ def chat():
             ]["pid"]
 
 
-            action_id = str(pid)
-
-
-            pending_actions[action_id] = (
-                pending_action
+            action_id = str(
+                pid
             )
 
 
-            result["action_id"] = (
+            pending_actions[
                 action_id
-            )
+            ] = pending_action
 
 
-        return jsonify(result)
+            result[
+                "action_id"
+            ] = action_id
+
+
+        return jsonify(
+            result
+        )
 
 
     except Exception as e:
@@ -113,6 +149,363 @@ def chat():
                 str(e)
 
         }), 500
+
+
+# =========================================================
+# ALERTMANAGER WEBHOOK
+# =========================================================
+
+@app.route(
+    "/webhook/alert",
+    methods=["POST"]
+)
+def alert_webhook():
+
+    global incident_counter
+
+    try:
+
+        # -------------------------------------------------
+        # Receive Alertmanager payload
+        # -------------------------------------------------
+
+        data = request.get_json(
+            silent=True
+        )
+
+
+        if not data:
+
+            return jsonify({
+
+                "success":
+                    False,
+
+                "error":
+                    "Empty or invalid JSON payload."
+
+            }), 400
+
+
+        print()
+        print(
+            "=============================================="
+        )
+        print(
+            "ALERT RECEIVED FROM ALERTMANAGER"
+        )
+        print(
+            "=============================================="
+        )
+
+
+        print(
+            data
+        )
+
+
+        # -------------------------------------------------
+        # Alertmanager can send multiple alerts
+        # in one webhook request.
+        # -------------------------------------------------
+
+        alerts = data.get(
+            "alerts",
+            []
+        )
+
+
+        # -------------------------------------------------
+        # Process every alert
+        # -------------------------------------------------
+
+        created_incidents = []
+
+
+        for alert in alerts:
+
+            status = alert.get(
+                "status",
+                "unknown"
+            )
+
+
+            labels = alert.get(
+                "labels",
+                {}
+            )
+
+
+            annotations = alert.get(
+                "annotations",
+                {}
+            )
+
+
+            alertname = labels.get(
+                "alertname",
+                "UnknownAlert"
+            )
+
+
+            severity = labels.get(
+                "severity",
+                "unknown"
+            )
+
+
+            instance = labels.get(
+                "instance",
+                "unknown"
+            )
+
+
+            summary = annotations.get(
+                "summary",
+                alertname
+            )
+
+
+            description = annotations.get(
+                "description",
+                ""
+            )
+
+
+            # -------------------------------------------------
+            # Generate Incident ID
+            # -------------------------------------------------
+
+            incident_counter += 1
+
+
+            incident_id = (
+                f"INC-{incident_counter:04d}"
+            )
+
+
+            # -------------------------------------------------
+            # Create Incident
+            # -------------------------------------------------
+
+            incident = {
+
+                "id":
+                    incident_id,
+
+                "alertname":
+                    alertname,
+
+                "status":
+                    status,
+
+                "severity":
+                    severity,
+
+                "instance":
+                    instance,
+
+                "summary":
+                    summary,
+
+                "description":
+                    description,
+
+                "started_at":
+                    alert.get(
+                        "startsAt"
+                    ),
+
+                "ended_at":
+                    alert.get(
+                        "endsAt"
+                    ),
+
+                "status":
+                    status,
+
+                "raw_alert":
+                    alert
+
+            }
+
+
+            # -------------------------------------------------
+            # Store incident
+            # -------------------------------------------------
+
+            incidents[
+                incident_id
+            ] = incident
+
+
+            created_incidents.append(
+                incident
+            )
+
+
+            print()
+            print(
+                "INCIDENT CREATED"
+            )
+
+            print(
+                "Incident ID:",
+                incident_id
+            )
+
+            print(
+                "Alert:",
+                alertname
+            )
+
+            print(
+                "Severity:",
+                severity
+            )
+
+            print(
+                "Instance:",
+                instance
+            )
+
+            print(
+                "Status:",
+                status
+            )
+
+            print(
+                "Summary:",
+                summary
+            )
+
+            print(
+                "Description:",
+                description
+            )
+
+            print(
+                "=============================================="
+            )
+
+
+        # -------------------------------------------------
+        # Return response to Alertmanager
+        # -------------------------------------------------
+
+        return jsonify({
+
+            "success":
+                True,
+
+            "message":
+                "Alert received successfully.",
+
+            "incidents":
+                created_incidents
+
+        }), 200
+
+
+    except Exception as e:
+
+        print(
+            "ERROR PROCESSING ALERT:"
+        )
+
+        print(
+            str(e)
+        )
+
+
+        return jsonify({
+
+            "success":
+                False,
+
+            "error":
+                str(e)
+
+        }), 500
+
+
+# =========================================================
+# GET INCIDENTS
+# =========================================================
+
+@app.route(
+    "/incidents",
+    methods=["GET"]
+)
+def get_incidents():
+
+    try:
+
+        return jsonify({
+
+            "success":
+                True,
+
+            "incidents":
+                list(
+                    incidents.values()
+                )
+
+        })
+
+
+    except Exception as e:
+
+        return jsonify({
+
+            "success":
+                False,
+
+            "error":
+                str(e)
+
+        }), 500
+
+
+# =========================================================
+# GET SINGLE INCIDENT
+# =========================================================
+
+@app.route(
+    "/incidents/<incident_id>",
+    methods=["GET"]
+)
+def get_incident(
+    incident_id
+):
+
+    incident = incidents.get(
+        incident_id
+    )
+
+
+    if not incident:
+
+        return jsonify({
+
+            "success":
+                False,
+
+            "error":
+                "Incident not found."
+
+        }), 404
+
+
+    return jsonify({
+
+        "success":
+            True,
+
+        "incident":
+            incident
+
+    })
 
 
 # =========================================================
@@ -131,7 +524,9 @@ def approve():
 
 
         action_id = str(
-            data.get("action_id")
+            data.get(
+                "action_id"
+            )
         )
 
 
@@ -162,7 +557,9 @@ def approve():
         # Validate action
         # -------------------------------------------------
 
-        if action["tool"] != "terminate_process":
+        if action["tool"] != (
+            "terminate_process"
+        ):
 
             return jsonify({
 
@@ -264,7 +661,9 @@ def reject():
 
 
         action_id = str(
-            data.get("action_id")
+            data.get(
+                "action_id"
+            )
         )
 
 
