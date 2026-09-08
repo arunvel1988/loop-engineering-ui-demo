@@ -1,0 +1,41 @@
+global:
+  scrape_interval: 5s
+
+  evaluation_interval: 5s
+
+
+# =========================================================
+# ALERTMANAGER
+# =========================================================
+
+alerting:
+
+  alertmanagers:
+
+    - static_configs:
+
+        - targets:
+            - alertmanager:9093
+
+
+# =========================================================
+# ALERT RULES
+# =========================================================
+
+rule_files:
+
+  - /etc/prometheus/alerts.yml
+
+
+# =========================================================
+# METRICS
+# =========================================================
+
+scrape_configs:
+
+  - job_name: node
+
+    static_configs:
+
+      - targets:
+          - node-exporter:9100

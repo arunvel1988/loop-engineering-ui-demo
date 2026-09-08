@@ -1,0 +1,38 @@
+#####################################################################################
+The server is slow. Investigate the problem and identify the root cause.
+##########################################################################################
+###########
+pip install psutil
+###############################################
+
+yes > /dev/null &
+####################################################
+
+My server is slow. Investigate the issue
+
+############################################################
+
+
+curl -X POST http://localhost:5000/webhook/alert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alerts": [
+      {
+        "status": "firing",
+        "labels": {
+          "alertname": "HighCPU",
+          "severity": "critical",
+          "instance": "test-server"
+        },
+        "annotations": {
+          "summary": "High CPU detected",
+          "description": "CPU usage has been above 50% for more than 30 seconds."
+        },
+        "startsAt": "2026-09-07T22:00:00Z",
+        "endsAt": "0001-01-01T00:00:00Z"
+      }
+    ]
+  }'
+
+
+###############################################################################
