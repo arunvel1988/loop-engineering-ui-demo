@@ -13,6 +13,8 @@ from tools import (
     check_processes
 )
 
+import threading
+
 
 app = Flask(__name__)
 
@@ -27,25 +29,6 @@ pending_actions = {}
 # =========================================================
 # INCIDENTS
 # =========================================================
-
-# Temporary in-memory incident store.
-#
-# Later we can replace this with a database or Redis.
-#
-# Example:
-#
-# {
-#     "INC-0001": {
-#         "id": "INC-0001",
-#         "alertname": "HighCPU",
-#         "status": "firing",
-#         "severity": "critical",
-#         "instance": "node-exporter:9100",
-#         "summary": "High CPU detected",
-#         "description": "...",
-#         "raw_alert": {...}
-#     }
-# }
 
 incidents = {}
 
@@ -152,6 +135,272 @@ def chat():
 
 
 # =========================================================
+# AUTOMATIC INCIDENT INVESTIGATION
+# =========================================================
+
+def investigate_incident(
+    incident_id,
+    incident
+):
+
+    print()
+    print(
+        "=================================================="
+    )
+    print(
+        "STARTING AUTOMATIC INCIDENT INVESTIGATION"
+    )
+    print(
+        "=================================================="
+    )
+
+    print(
+        "Incident:",
+        incident_id
+    )
+
+    print(
+        "Alert:",
+        incident.get(
+            "alertname"
+        )
+    )
+
+
+    # -----------------------------------------------------
+    # Update incident status
+    # -----------------------------------------------------
+
+    incident["agent_status"] = (
+        "investigating"
+    )
+
+
+    incident["agent_message"] = (
+        "DevOps Agent is investigating this incident."
+    )
+
+
+    try:
+
+        # -------------------------------------------------
+        # Build investigation task
+        # -------------------------------------------------
+
+        task = f"""
+A production infrastructure incident has been automatically detected.
+
+Incident ID:
+{incident_id}
+
+Alert:
+{incident.get("alertname", "Unknown")}
+
+Severity:
+{incident.get("severity", "Unknown")}
+
+Instance:
+{incident.get("instance", "Unknown")}
+
+Summary:
+{incident.get("summary", "")}
+
+Description:
+{incident.get("description", "")}
+
+The incident was generated automatically by Alertmanager.
+
+Investigate this incident using the available infrastructure
+observation tools.
+
+Do not assume the root cause.
+
+Collect real telemetry and correlate the evidence.
+
+Identify the root cause only when the evidence supports it.
+
+If a remediation is justified, propose it using the available
+remediation mechanism.
+
+Do not invent infrastructure information.
+
+After investigation, provide:
+
+Investigation Summary
+
+Root Cause
+
+Evidence
+
+Recommended Remediation
+
+Risk Assessment
+
+Action Required
+"""
+
+
+        print()
+        print(
+            "Sending incident to GPT-OSS..."
+        )
+
+
+        # -------------------------------------------------
+        # RUN EXISTING AGENT
+        # -------------------------------------------------
+
+        result = run_agent(
+            task
+        )
+
+
+        # -------------------------------------------------
+        # Store agent response
+        # -------------------------------------------------
+
+        incident["agent_status"] = (
+            "completed"
+        )
+
+
+        incident["agent_response"] = (
+            result.get(
+                "response",
+                ""
+            )
+        )
+
+
+        # -------------------------------------------------
+        # Check remediation request
+        # -------------------------------------------------
+
+        pending_action = (
+            result.get(
+                "pending_action"
+            )
+        )
+
+
+        if pending_action:
+
+            pid = pending_action[
+                "arguments"
+            ].get(
+                "pid"
+            )
+
+
+            action_id = (
+                f"{incident_id}-{pid}"
+            )
+
+
+            pending_actions[
+                action_id
+            ] = pending_action
+
+
+            incident["action_id"] = (
+                action_id
+            )
+
+
+            incident["pending_action"] = (
+                pending_action
+            )
+
+
+            incident["agent_status"] = (
+                "waiting_for_approval"
+            )
+
+
+            incident["agent_message"] = (
+                "The DevOps Agent identified a "
+                "remediation action. Human approval "
+                "is required."
+            )
+
+
+        else:
+
+            incident["agent_message"] = (
+                "Investigation completed."
+            )
+
+
+        print()
+        print(
+            "=================================================="
+        )
+
+        print(
+            "INCIDENT INVESTIGATION COMPLETED"
+        )
+
+        print(
+            "Incident:",
+            incident_id
+        )
+
+        print(
+            "Agent Status:",
+            incident["agent_status"]
+        )
+
+        print(
+            "=================================================="
+        )
+
+
+    except Exception as e:
+
+        # -------------------------------------------------
+        # Investigation failed
+        # -------------------------------------------------
+
+        incident["agent_status"] = (
+            "failed"
+        )
+
+
+        incident["agent_message"] = (
+            "Automatic investigation failed."
+        )
+
+
+        incident["agent_error"] = (
+            str(e)
+        )
+
+
+        print()
+        print(
+            "=================================================="
+        )
+
+        print(
+            "INCIDENT INVESTIGATION FAILED"
+        )
+
+        print(
+            "Incident:",
+            incident_id
+        )
+
+        print(
+            "Error:",
+            str(e)
+        )
+
+        print(
+            "=================================================="
+        )
+
+
+# =========================================================
 # ALERTMANAGER WEBHOOK
 # =========================================================
 
@@ -189,24 +438,20 @@ def alert_webhook():
 
         print()
         print(
-            "=============================================="
+            "=================================================="
         )
+
         print(
             "ALERT RECEIVED FROM ALERTMANAGER"
         )
-        print(
-            "=============================================="
-        )
-
 
         print(
-            data
+            "=================================================="
         )
 
 
         # -------------------------------------------------
-        # Alertmanager can send multiple alerts
-        # in one webhook request.
+        # Alertmanager sends an "alerts" array
         # -------------------------------------------------
 
         alerts = data.get(
@@ -215,12 +460,12 @@ def alert_webhook():
         )
 
 
+        created_incidents = []
+
+
         # -------------------------------------------------
         # Process every alert
         # -------------------------------------------------
-
-        created_incidents = []
-
 
         for alert in alerts:
 
@@ -321,8 +566,15 @@ def alert_webhook():
                         "endsAt"
                     ),
 
-                "status":
-                    status,
+                "agent_status":
+                    "queued",
+
+                "agent_message":
+                    "Incident received. "
+                    "Investigation is starting.",
+
+                "agent_response":
+                    "",
 
                 "raw_alert":
                     alert
@@ -331,7 +583,7 @@ def alert_webhook():
 
 
             # -------------------------------------------------
-            # Store incident
+            # Store Incident
             # -------------------------------------------------
 
             incidents[
@@ -369,28 +621,34 @@ def alert_webhook():
                 instance
             )
 
-            print(
-                "Status:",
-                status
+
+            # -------------------------------------------------
+            # AUTOMATICALLY START AGENT
+            # -------------------------------------------------
+
+            investigation_thread = (
+                threading.Thread(
+                    target=investigate_incident,
+                    args=(
+                        incident_id,
+                        incident
+                    ),
+                    daemon=True
+                )
             )
 
-            print(
-                "Summary:",
-                summary
-            )
 
-            print(
-                "Description:",
-                description
-            )
+            investigation_thread.start()
 
-            print(
-                "=============================================="
-            )
+
+        print()
+        print(
+            "=================================================="
+        )
 
 
         # -------------------------------------------------
-        # Return response to Alertmanager
+        # Immediately respond to Alertmanager
         # -------------------------------------------------
 
         return jsonify({
@@ -399,7 +657,7 @@ def alert_webhook():
                 True,
 
             "message":
-                "Alert received successfully.",
+                "Alert received and investigation started.",
 
             "incidents":
                 created_incidents
