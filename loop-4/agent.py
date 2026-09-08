@@ -1,4 +1,5 @@
 import json
+
 from groq import Groq
 
 from tools import TOOL_FUNCTIONS
@@ -6,7 +7,7 @@ from memory import save_memory, search_memory
 
 
 # ============================================================
-# GROQ
+# GROQ CONFIGURATION
 # ============================================================
 
 client = Groq()
@@ -18,16 +19,16 @@ MODEL = "openai/gpt-oss-120b"
 # MEMORY CONFIGURATION
 # ============================================================
 
-# Keep short-term context small.
-# This is important because GPT-OSS 120B has an 8000 TPM limit
-# on your current Groq tier.
+# Keep short-term conversation context small.
+#
+# Important because the current Groq tier has an 8000 TPM
+# limitation for GPT-OSS 120B.
 MAX_SHORT_TERM_MESSAGES = 8
 
-# Maximum long-term memories added to the prompt.
+# Maximum long-term memories retrieved from ChromaDB.
 MAX_LONG_TERM_MEMORIES = 3
 
-# Maximum number of memories GPT is allowed to create
-# from one interaction.
+# Maximum durable memories created from one interaction.
 MAX_NEW_MEMORIES = 3
 
 
@@ -36,11 +37,19 @@ MAX_NEW_MEMORIES = 3
 # ============================================================
 
 TOOLS = [
+
+    # --------------------------------------------------------
+    # SERVER
+    # --------------------------------------------------------
+
     {
         "type": "function",
         "function": {
             "name": "check_server",
-            "description": "Check CPU, memory and disk usage of the server.",
+            "description": (
+                "Check current CPU, memory and disk usage "
+                "of the server."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -48,12 +57,20 @@ TOOLS = [
             }
         }
     },
+
+    # --------------------------------------------------------
+    # PROCESSES
+    # --------------------------------------------------------
 
     {
         "type": "function",
         "function": {
             "name": "check_processes",
-            "description": "List the top processes sorted by CPU usage. Use this to identify runaway or CPU-intensive processes.",
+            "description": (
+                "List the current top processes sorted by "
+                "CPU usage. Use this to identify runaway "
+                "or CPU-intensive processes."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -61,12 +78,19 @@ TOOLS = [
             }
         }
     },
+
+    # --------------------------------------------------------
+    # PORTS
+    # --------------------------------------------------------
 
     {
         "type": "function",
         "function": {
             "name": "check_ports",
-            "description": "Check listening network ports on the server.",
+            "description": (
+                "Check current listening network ports "
+                "on the server."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -74,12 +98,19 @@ TOOLS = [
             }
         }
     },
+
+    # --------------------------------------------------------
+    # DOCKER
+    # --------------------------------------------------------
 
     {
         "type": "function",
         "function": {
             "name": "check_docker",
-            "description": "Check Docker containers and their current state.",
+            "description": (
+                "Check current Docker containers and their "
+                "current state."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -88,25 +119,48 @@ TOOLS = [
         }
     },
 
+    # --------------------------------------------------------
+    # PREVIOUS INCIDENTS
+    # --------------------------------------------------------
+
     {
         "type": "function",
         "function": {
             "name": "search_previous_incidents",
-            "description": "Search previous DevOps incidents stored in the incident database. Use this during incident investigation to look for similar past incidents, previous root causes and previous remediation results. Historical incidents are supporting evidence only and must never be treated as proof of the current root cause.",
+            "description": (
+                "Search previous DevOps incidents stored in "
+                "the incident database. Use this during incident "
+                "investigation to look for similar past incidents, "
+                "previous root causes and previous remediation "
+                "results. Historical incidents are supporting "
+                "evidence only and must never be treated as proof "
+                "of the current root cause."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+
                     "alertname": {
                         "type": "string",
-                        "description": "Alert name such as HighCPU."
+                        "description": (
+                            "Alert name such as HighCPU."
+                        )
                     },
+
                     "severity": {
                         "type": "string",
-                        "description": "Optional severity such as critical or warning."
+                        "description": (
+                            "Optional severity such as "
+                            "critical or warning."
+                        )
                     },
+
                     "limit": {
                         "type": "integer",
-                        "description": "Maximum number of previous incidents. Keep this small."
+                        "description": (
+                            "Maximum number of previous "
+                            "incidents. Keep this small."
+                        )
                     }
                 },
                 "required": []
@@ -114,20 +168,37 @@ TOOLS = [
         }
     },
 
+    # --------------------------------------------------------
+    # TERMINATE PROCESS
+    # --------------------------------------------------------
+
     {
         "type": "function",
         "function": {
             "name": "terminate_process",
-            "description": "Request termination of a specific process by PID when investigation shows that the process is causing the incident. This is a remediation proposal. The application intercepts this request and requires human approval before actually terminating the process.",
+            "description": (
+                "Request termination of a specific process "
+                "by PID when investigation shows that the "
+                "process is causing the incident. This is a "
+                "remediation proposal. The application intercepts "
+                "this request and requires human approval before "
+                "actually terminating the process."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
+
                     "pid": {
                         "type": "integer",
-                        "description": "PID of the process that should be terminated."
+                        "description": (
+                            "PID of the process that should "
+                            "be terminated."
+                        )
                     }
                 },
-                "required": ["pid"]
+                "required": [
+                    "pid"
+                ]
             }
         }
     }
@@ -148,7 +219,7 @@ You must behave like a production SRE.
 
 
 ===========================================================
-CONVERSATION MEMORY
+1. CONVERSATION MEMORY
 ===========================================================
 
 You may receive previous messages from the current conversation.
@@ -176,85 +247,191 @@ Conversation memory represents previous conversation context.
 
 It is NOT current infrastructure telemetry.
 
-When the user asks for the current state, use the appropriate
-infrastructure tool instead of trusting an old result.
+When the user asks about CURRENT infrastructure state,
+always use the appropriate infrastructure tool.
 
 
 ===========================================================
-LONG-TERM CONVERSATIONAL MEMORY
+2. LONG-TERM CONVERSATIONAL MEMORY
 ===========================================================
 
-You may also receive long-term memories retrieved from
-the memory database.
+You may receive relevant long-term memories retrieved
+from ChromaDB.
 
-These memories represent information learned from previous
-conversations.
+These memories represent durable information learned
+from previous conversations.
 
 Examples:
 
 - application names
-- infrastructure preferences
-- architecture information
-- user preferences
 - project information
-- persistent configuration information
+- architecture information
+- infrastructure conventions
+- persistent configuration
+- stable user preferences
+- recurring operational preferences
 
 Use long-term memories when they are relevant.
 
 IMPORTANT:
 
-Long-term memory is not current infrastructure telemetry.
+Long-term conversational memory is NOT live infrastructure
+telemetry.
 
-If a memory says:
+For example, if memory says:
 
-"The application uses Docker."
+"The user's application is called ecommerce-app."
 
-and the user asks:
+that should be used when the user asks:
 
-"What containers are running right now?"
+"What is my application called?"
+
+However, if the user asks:
+
+"What containers are currently running?"
 
 you MUST use the Docker tool.
 
-Never treat long-term memory as live infrastructure state.
+Do not confuse an application name with:
 
-If current tool data conflicts with memory, trust the current
-tool data.
+- Docker Compose project name
+- container name
+- service name
+- hostname
+- infrastructure resource name
 
-
-===========================================================
-MEMORY SAFETY
-===========================================================
-
-Do not assume every statement should become long-term memory.
-
-Only durable and useful information should be remembered.
-
-Good memories include:
-
-- application names
-- project architecture
-- persistent configuration
-- stable user preferences
-- infrastructure conventions
-- recurring operational preferences
-
-Do NOT remember:
-
-- greetings
-- temporary CPU values
-- temporary memory values
-- temporary process IDs
-- one-time investigation results
-- casual conversation
-- secrets
-- passwords
-- API keys
-- access tokens
+These can be different things.
 
 
 ===========================================================
-INVESTIGATION WORKFLOW
+3. MEMORY QUESTIONS VS CURRENT STATE QUESTIONS
 ===========================================================
+
+This distinction is VERY IMPORTANT.
+
+If the user asks about something previously told to the
+agent, use long-term memory.
+
+Examples:
+
+"What is my application called?"
+
+"What application do I use?"
+
+"What database did I tell you I use?"
+
+"What architecture did I tell you about?"
+
+"What are my DevOps preferences?"
+
+"What container name did I tell you earlier?"
+
+For these questions, do NOT automatically call infrastructure
+tools.
+
+Use the relevant long-term memory.
+
+However, if the user asks about CURRENT infrastructure:
+
+"What containers are running now?"
+
+"What is the CPU right now?"
+
+"What ports are open now?"
+
+"Is Docker running now?"
+
+"What is the current memory usage?"
+
+then call the appropriate live infrastructure tool.
+
+NEVER replace a memory answer with unrelated live telemetry.
+
+For example:
+
+If long-term memory says:
+
+"The user's application is called ecommerce-app."
+
+and Docker reports:
+
+"Compose project = monitoring"
+
+then:
+
+"What is my application called?"
+
+must be answered:
+
+"ecommerce-app"
+
+It must NOT be answered:
+
+"monitoring"
+
+because monitoring is the Docker Compose project name,
+not necessarily the application name.
+
+
+===========================================================
+4. CURRENT TELEMETRY
+===========================================================
+
+Use current infrastructure tools to collect real data.
+
+Never invent:
+
+- CPU values
+- memory values
+- disk values
+- process names
+- process IDs
+- ports
+- Docker containers
+- service states
+- infrastructure status
+
+
+If the user asks:
+
+"What is CPU now?"
+
+call:
+
+check_server
+
+Do not answer using an old conversation value.
+
+If the user asks:
+
+"What processes are using CPU now?"
+
+call:
+
+check_processes
+
+If the user asks:
+
+"What containers are running now?"
+
+call:
+
+check_docker
+
+If the user asks:
+
+"What ports are listening now?"
+
+call:
+
+check_ports
+
+
+===========================================================
+5. INVESTIGATION WORKFLOW
+===========================================================
+
+For infrastructure incidents:
 
 1. CHECK INCIDENT HISTORY WHEN RELEVANT
 2. OBSERVE CURRENT INFRASTRUCTURE
@@ -266,7 +443,7 @@ INVESTIGATION WORKFLOW
 
 
 ===========================================================
-AVAILABLE TOOLS
+6. AVAILABLE TOOLS
 ===========================================================
 
 Current infrastructure:
@@ -276,7 +453,7 @@ Current infrastructure:
 - check_ports
 - check_docker
 
-Historical incident memory:
+Historical operational memory:
 
 - search_previous_incidents
 
@@ -286,62 +463,37 @@ Remediation:
 
 
 ===========================================================
-CURRENT TELEMETRY
-===========================================================
-
-Use current infrastructure tools to collect real data.
-
-Do not invent:
-
-- CPU values
-- memory values
-- disk values
-- process names
-- process IDs
-- ports
-- Docker containers
-- service states
-
-If the user asks:
-
-"what is CPU now?"
-
-call:
-
-check_server
-
-Do not answer using an old conversation value.
-
-
-===========================================================
-CPU INCIDENT
+7. CPU INCIDENT
 ===========================================================
 
 If server CPU is significantly elevated and a process is
 using approximately 100% CPU, investigate whether that
 process correlates with the elevated CPU usage.
 
-Only request termination when current evidence supports it.
+Only request termination when CURRENT evidence supports it.
+
+Never use historical incidents as proof of the current
+root cause.
 
 
 ===========================================================
-HISTORICAL INCIDENT MEMORY
+8. HISTORICAL INCIDENT MEMORY
 ===========================================================
 
-Previous incidents are long-term operational history.
+Previous incidents are historical operational evidence.
 
 Use search_previous_incidents when relevant.
 
 Historical incidents are supporting evidence only.
 
-They must never be treated as proof of the current root cause.
+They must NEVER be treated as proof of the current root cause.
 
 If historical evidence conflicts with current telemetry,
 trust current telemetry.
 
 
 ===========================================================
-ROOT CAUSE
+9. ROOT CAUSE
 ===========================================================
 
 Only identify a root cause when evidence supports it.
@@ -353,7 +505,7 @@ available telemetry."
 
 
 ===========================================================
-REMEDIATION
+10. REMEDIATION
 ===========================================================
 
 terminate_process is destructive.
@@ -375,10 +527,43 @@ Never invent a PID.
 
 
 ===========================================================
-RESPONSE FORMAT
+11. LONG-TERM MEMORY SAFETY
 ===========================================================
 
-For investigations use:
+Not every conversation message should become memory.
+
+Only remember durable and useful information.
+
+Good memories:
+
+- application names
+- project names
+- architecture
+- persistent configuration
+- infrastructure conventions
+- stable preferences
+- recurring operational preferences
+
+Do NOT remember:
+
+- greetings
+- temporary CPU values
+- temporary memory values
+- temporary disk values
+- temporary process IDs
+- one-time investigation results
+- casual conversation
+- passwords
+- API keys
+- secrets
+- access tokens
+
+
+===========================================================
+12. RESPONSE FORMAT
+===========================================================
+
+For infrastructure investigations use:
 
 Investigation Summary
 
@@ -406,10 +591,12 @@ Keep responses concise and evidence-based.
 
 def get_long_term_memory(task):
     """
-    Search ChromaDB for memories relevant to the current request.
+    Search ChromaDB for memories relevant to the user's
+    current request.
     """
 
     try:
+
         memories = search_memory(
             query=task,
             limit=MAX_LONG_TERM_MEMORIES
@@ -421,6 +608,7 @@ def get_long_term_memory(task):
         return memories
 
     except Exception as e:
+
         print(
             f"[MEMORY] Long-term memory search failed: {e}"
         )
@@ -429,12 +617,13 @@ def get_long_term_memory(task):
 
 
 # ============================================================
-# FORMAT LONG-TERM MEMORY FOR GPT
+# BUILD MEMORY CONTEXT
 # ============================================================
 
 def build_memory_context(memories):
     """
-    Convert ChromaDB results into a compact prompt section.
+    Convert ChromaDB search results into a compact
+    context block for GPT-OSS.
     """
 
     if not memories:
@@ -445,21 +634,30 @@ def build_memory_context(memories):
         "RELEVANT LONG-TERM MEMORY",
         "===========================================================",
         "",
-        "The following memories were retrieved from previous",
-        "conversations. Use them only when relevant.",
-        ""
+        "These are memories retrieved from previous conversations.",
+        "Use them only when relevant to the user's question.",
+        "",
     ]
 
-    for index, item in enumerate(memories, start=1):
+    for index, item in enumerate(
+        memories,
+        start=1
+    ):
 
-        memory = item.get("memory", "")
+        memory = item.get(
+            "memory",
+            ""
+        )
 
         if not memory:
             continue
 
-        # Protect token usage.
+        # Keep memory small to protect Groq TPM.
         if len(memory) > 1000:
-            memory = memory[:1000] + "..."
+            memory = (
+                memory[:1000]
+                + "..."
+            )
 
         lines.append(
             f"{index}. {memory}"
@@ -471,52 +669,63 @@ def build_memory_context(memories):
 
 
 # ============================================================
-# EXTRACT LONG-TERM MEMORIES
+# EXTRACT DURABLE MEMORIES
 # ============================================================
 
-def extract_memories(task, response):
+def extract_memories(
+    task,
+    response
+):
     """
-    Ask GPT-OSS to identify durable information worth storing.
+    Ask GPT-OSS to identify durable information worth
+    storing in ChromaDB.
 
-    This is a separate small Groq call.
-
-    It does NOT execute tools.
+    This is NOT a tool call.
     """
 
     if not response:
         return []
 
     memory_prompt = f"""
-You are a memory extraction system.
+You are a long-term memory extraction system.
 
-Identify only durable information from this interaction that
-would be useful in a future conversation.
+Read the interaction below and identify only information
+that is likely to remain useful in future conversations.
 
-Store useful facts such as:
+Good examples:
 
 - application names
-- project architecture
-- persistent configuration
-- stable preferences
-- infrastructure conventions
+- project names
+- architecture
+- infrastructure configuration
+- persistent preferences
+- stable DevOps conventions
 - recurring operational preferences
 
-Do NOT store:
+Do NOT save:
 
 - greetings
 - temporary CPU values
 - temporary memory values
+- temporary disk values
 - temporary process IDs
-- one-time investigation results
+- one-time incident results
+- temporary infrastructure state
 - casual conversation
 - passwords
 - API keys
 - secrets
 - access tokens
 
+IMPORTANT:
+
+Do not reinterpret or invent information.
+
+Only extract facts explicitly supported by the interaction.
+
 Return ONLY valid JSON.
 
-Use this exact format:
+Exact format:
 
 {{
   "memories": [
@@ -525,7 +734,7 @@ Use this exact format:
   ]
 }}
 
-If there is nothing worth remembering:
+If nothing is worth remembering:
 
 {{
   "memories": []
@@ -546,8 +755,8 @@ AGENT RESPONSE:
                 {
                     "role": "system",
                     "content": (
-                        "You extract durable long-term memories. "
-                        "Return only JSON."
+                        "You extract durable long-term "
+                        "memories. Return only JSON."
                     )
                 },
                 {
@@ -560,21 +769,37 @@ AGENT RESPONSE:
             reasoning_effort="low"
         )
 
-        content = result.choices[0].message.content or ""
+        content = (
+            result
+            .choices[0]
+            .message
+            .content
+            or ""
+        )
+
+        content = content.strip()
+
 
         # ----------------------------------------------------
-        # Parse JSON
+        # Parse normal JSON
         # ----------------------------------------------------
 
         try:
-            data = json.loads(content)
+
+            data = json.loads(
+                content
+            )
 
         except json.JSONDecodeError:
 
-            # Sometimes models wrap JSON in markdown.
-            content = content.strip()
+            # ------------------------------------------------
+            # Handle markdown JSON
+            # ------------------------------------------------
 
-            if content.startswith("```"):
+            if content.startswith(
+                "```"
+            ):
+
                 content = content.replace(
                     "```json",
                     ""
@@ -588,27 +813,40 @@ AGENT RESPONSE:
                 content = content.strip()
 
             try:
-                data = json.loads(content)
+
+                data = json.loads(
+                    content
+                )
 
             except json.JSONDecodeError:
+
                 print(
                     "[MEMORY] Could not parse memory JSON."
                 )
+
                 return []
+
 
         memories = data.get(
             "memories",
             []
         )
 
-        if not isinstance(memories, list):
+        if not isinstance(
+            memories,
+            list
+        ):
             return []
+
 
         cleaned = []
 
         for memory in memories:
 
-            if not isinstance(memory, str):
+            if not isinstance(
+                memory,
+                str
+            ):
                 continue
 
             memory = memory.strip()
@@ -617,14 +855,20 @@ AGENT RESPONSE:
                 continue
 
             if len(memory) > 1000:
+
                 memory = memory[:1000]
 
-            cleaned.append(memory)
+
+            cleaned.append(
+                memory
+            )
 
             if len(cleaned) >= MAX_NEW_MEMORIES:
                 break
 
+
         return cleaned
+
 
     except Exception as e:
 
@@ -645,26 +889,33 @@ def store_long_term_memories(
     response
 ):
     """
-    Extract and save durable memories to ChromaDB.
+    Extract durable memories from the interaction and
+    store them in ChromaDB.
     """
 
     if not response:
         return
+
 
     memories = extract_memories(
         task,
         response
     )
 
+
     if not memories:
         return
+
 
     for memory in memories:
 
         try:
 
             save_memory(
-                conversation_id=conversation_id or "unknown",
+                conversation_id=(
+                    conversation_id
+                    or "unknown"
+                ),
                 memory=memory,
                 memory_type="conversation"
             )
@@ -681,7 +932,7 @@ def store_long_term_memories(
 
 
 # ============================================================
-# AGENT
+# MAIN AGENT
 # ============================================================
 
 def run_agent(
@@ -689,9 +940,8 @@ def run_agent(
     conversation_history=None,
     conversation_id=None
 ):
-
     """
-    Run GPT-OSS with:
+    Run GPT-OSS 120B with:
 
     - short-term conversation memory
     - long-term ChromaDB memory
@@ -707,9 +957,9 @@ def run_agent(
     ]
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # LONG-TERM MEMORY
-    # --------------------------------------------------------
+    # ========================================================
 
     long_term_memories = get_long_term_memory(
         task
@@ -729,9 +979,9 @@ def run_agent(
         )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SHORT-TERM MEMORY
-    # --------------------------------------------------------
+    # ========================================================
 
     if conversation_history:
 
@@ -741,7 +991,9 @@ def run_agent(
 
         for item in recent_history:
 
-            role = item.get("role")
+            role = item.get(
+                "role"
+            )
 
             content = item.get(
                 "content",
@@ -757,9 +1009,13 @@ def run_agent(
             if not content:
                 continue
 
-            # Protect TPM by limiting individual memory entries.
+            # Protect Groq TPM.
             if len(content) > 3000:
-                content = content[:3000] + "..."
+
+                content = (
+                    content[:3000]
+                    + "..."
+                )
 
             messages.append(
                 {
@@ -769,9 +1025,9 @@ def run_agent(
             )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CURRENT REQUEST
-    # --------------------------------------------------------
+    # ========================================================
 
     messages.append(
         {
@@ -785,7 +1041,7 @@ def run_agent(
 
 
     # ========================================================
-    # AGENT LOOP
+    # AGENT TOOL LOOP
     # ========================================================
 
     while True:
@@ -800,21 +1056,25 @@ def run_agent(
             reasoning_effort="medium"
         )
 
+
         message = response.choices[0].message
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # NO TOOL CALL
-        # ----------------------------------------------------
+        # ====================================================
 
         if not message.tool_calls:
 
-            final_response = message.content or ""
+            final_response = (
+                message.content
+                or ""
+            )
 
 
-            # ------------------------------------------------
+            # =================================================
             # SAVE LONG-TERM MEMORY
-            # ------------------------------------------------
+            # =================================================
 
             try:
 
@@ -837,30 +1097,38 @@ def run_agent(
             }
 
 
-        # ----------------------------------------------------
-        # Add assistant tool-call message
-        # ----------------------------------------------------
+        # ====================================================
+        # ADD ASSISTANT TOOL CALL
+        # ====================================================
 
-        messages.append(message)
+        messages.append(
+            message
+        )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # PROCESS TOOL CALLS
-        # ----------------------------------------------------
+        # ====================================================
 
         for tool_call in message.tool_calls:
 
-            tool_name = tool_call.function.name
+            tool_name = (
+                tool_call
+                .function
+                .name
+            )
 
 
             # ------------------------------------------------
-            # Parse arguments
+            # Parse tool arguments
             # ------------------------------------------------
 
             try:
 
                 arguments = json.loads(
-                    tool_call.function.arguments
+                    tool_call
+                    .function
+                    .arguments
                 )
 
             except json.JSONDecodeError:
@@ -868,9 +1136,9 @@ def run_agent(
                 arguments = {}
 
 
-            # ------------------------------------------------
-            # REMEDIATION
-            # ------------------------------------------------
+            # =================================================
+            # DESTRUCTIVE REMEDIATION
+            # =================================================
 
             if tool_name == "terminate_process":
 
@@ -887,11 +1155,14 @@ def run_agent(
                         "error": "No PID was provided."
                     }
 
+
                 else:
 
                     try:
 
-                        pid = int(pid)
+                        pid = int(
+                            pid
+                        )
 
                     except (
                         ValueError,
@@ -904,39 +1175,53 @@ def run_agent(
                             "error": "Invalid PID."
                         }
 
+
                     else:
+
+                        # ------------------------------------
+                        # Never terminate PID 1
+                        # ------------------------------------
 
                         if pid == 1:
 
                             result = {
                                 "success": False,
                                 "requires_approval": False,
-                                "error": "PID 1 cannot be terminated."
+                                "error": (
+                                    "PID 1 cannot be terminated."
+                                )
                             }
+
 
                         else:
 
                             pending_action = {
-                                "tool": "terminate_process",
+                                "tool": (
+                                    "terminate_process"
+                                ),
                                 "arguments": {
                                     "pid": pid
                                 },
-                                "description":
+                                "description": (
                                     f"Terminate process PID {pid}"
+                                )
                             }
+
 
                             result = {
                                 "success": False,
                                 "requires_approval": True,
                                 "pid": pid,
-                                "message":
-                                    f"Termination of PID {pid} requires human approval."
+                                "message": (
+                                    f"Termination of PID {pid} "
+                                    "requires human approval."
+                                )
                             }
 
 
-            # ------------------------------------------------
-            # NORMAL READ-ONLY TOOL
-            # ------------------------------------------------
+            # =================================================
+            # READ-ONLY TOOL
+            # =================================================
 
             else:
 
@@ -949,9 +1234,11 @@ def run_agent(
 
                     result = {
                         "success": False,
-                        "error":
+                        "error": (
                             f"Unknown tool: {tool_name}"
+                        )
                     }
+
 
                 else:
 
@@ -969,9 +1256,9 @@ def run_agent(
                         }
 
 
-            # ------------------------------------------------
-            # Give tool result back to model
-            # ------------------------------------------------
+            # =================================================
+            # SEND TOOL RESULT BACK TO GPT
+            # =================================================
 
             messages.append(
                 {
