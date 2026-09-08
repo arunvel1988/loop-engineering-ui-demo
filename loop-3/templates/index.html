@@ -1,1790 +1,1397 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
-
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>DevOps Agent</title>
 
-
     <style>
-
         * {
             box-sizing: border-box;
         }
 
-
         body {
-
             margin: 0;
-
-            background: #0f1117;
-
-            color: #e6e6e6;
-
             font-family: Arial, sans-serif;
+            background: #0f1117;
+            color: #e6e6e6;
+            height: 100vh;
+            overflow: hidden;
         }
 
-
-        /* =====================================================
-           HEADER
-        ===================================================== */
-
-        .header {
-
-            height: 65px;
-
-            background: #171a21;
-
-            border-bottom: 1px solid #2a2f3a;
-
+        .app {
             display: flex;
-
-            align-items: center;
-
-            padding: 0 25px;
+            height: 100vh;
         }
 
-
-        .title {
-
-            font-size: 20px;
-
-            font-weight: bold;
-        }
-
-
-        .status {
-
-            margin-left: 20px;
-
-            font-size: 13px;
-
-            color: #8f98a8;
-        }
-
-
-        /* =====================================================
-           LAYOUT
-        ===================================================== */
-
-        .layout {
-
-            display: flex;
-
-            height: calc(100vh - 65px);
-        }
-
-
-        /* =====================================================
+        /* =========================
            SIDEBAR
-        ===================================================== */
+        ========================== */
 
         .sidebar {
-
-            width: 220px;
-
+            width: 230px;
             background: #171a21;
-
-            border-right: 1px solid #2a2f3a;
-
-            padding: 20px;
+            border-right: 1px solid #2b2f3a;
+            padding: 20px 12px;
         }
 
-
-        .nav-title {
-
-            font-size: 12px;
-
-            color: #8f98a8;
-
-            text-transform: uppercase;
-
-            margin-bottom: 10px;
+        .logo {
+            font-size: 20px;
+            font-weight: bold;
+            padding: 10px 12px 25px;
         }
-
 
         .nav-item {
-
-            padding: 13px 12px;
-
-            border-radius: 7px;
-
-            margin-bottom: 6px;
-
+            padding: 12px;
+            margin-bottom: 5px;
+            border-radius: 6px;
             cursor: pointer;
-
-            color: #c8ced8;
+            color: #b8bcc7;
         }
-
 
         .nav-item:hover {
-
-            background: #202531;
+            background: #222631;
+            color: white;
         }
-
 
         .nav-item.active {
-
-            background: #252b38;
-
+            background: #272c38;
             color: white;
-
-            font-weight: bold;
         }
 
-
-        .incident-count {
-
+        .incident-badge {
             float: right;
-
-            background: #ef4444;
-
+            background: #d64545;
             color: white;
-
-            border-radius: 20px;
-
-            padding: 2px 8px;
-
+            padding: 2px 7px;
+            border-radius: 10px;
             font-size: 11px;
-
-            font-weight: bold;
         }
 
-
-        /* =====================================================
+        /* =========================
            MAIN
-        ===================================================== */
+        ========================== */
 
         .main {
-
             flex: 1;
-
-            min-width: 0;
-
             display: flex;
-
             flex-direction: column;
+            min-width: 0;
         }
 
+        .header {
+            height: 60px;
+            border-bottom: 1px solid #2b2f3a;
+            display: flex;
+            align-items: center;
+            padding: 0 25px;
+            font-size: 18px;
+            font-weight: bold;
+        }
 
-        /* =====================================================
-           CHAT
-        ===================================================== */
-
-        #chat {
-
+        .content {
             flex: 1;
-
             overflow-y: auto;
-
-            padding: 30px;
+            padding: 25px;
         }
 
+        /* =========================
+           CHAT
+        ========================== */
+
+        #chatPanel {
+            max-width: 1000px;
+            margin: auto;
+        }
+
+        .messages {
+            min-height: 70vh;
+        }
 
         .message {
-
-            margin-bottom: 20px;
-
-            padding: 16px 18px;
-
-            border-radius: 10px;
-
-            line-height: 1.6;
-
+            margin-bottom: 18px;
+            padding: 14px;
+            border-radius: 8px;
             white-space: pre-wrap;
+            line-height: 1.5;
         }
 
-
-        .user {
-
-            background: #1d2633;
-
-            margin-left: 20%;
+        .user-message {
+            background: #20242e;
         }
 
-
-        .assistant {
-
-            background: #171a21;
-
-            border: 1px solid #292f3a;
-
-            margin-right: 10%;
+        .agent-message {
+            background: #171c25;
+            border: 1px solid #2a303c;
         }
 
-
-        .loading {
-
-            color: #8f98a8;
-
-            font-style: italic;
-        }
-
-
-        /* =====================================================
-           INCIDENT PANEL
-        ===================================================== */
-
-        #incidentPanel {
-
-            display: none;
-
-            flex: 1;
-
-            overflow-y: auto;
-
-            padding: 30px;
-        }
-
-
-        .incident-header {
-
+        .chat-input {
             display: flex;
-
-            justify-content: space-between;
-
-            align-items: center;
-
-            margin-bottom: 25px;
-        }
-
-
-        .incident-title {
-
-            font-size: 24px;
-
-            font-weight: bold;
-        }
-
-
-        .refresh-status {
-
-            color: #8f98a8;
-
-            font-size: 12px;
-        }
-
-
-        /* =====================================================
-           INCIDENT CARD
-        ===================================================== */
-
-        .incident-card {
-
-            background: #171a21;
-
-            border: 1px solid #292f3a;
-
-            border-radius: 12px;
-
-            padding: 22px;
-
-            margin-bottom: 15px;
-
-            cursor: pointer;
-        }
-
-
-        .incident-card:hover {
-
-            border-color: #4f46e5;
-        }
-
-
-        .incident-top {
-
-            display: flex;
-
-            justify-content: space-between;
-
-            align-items: center;
-
-            margin-bottom: 15px;
-        }
-
-
-        .incident-id {
-
-            font-size: 13px;
-
-            color: #8f98a8;
-        }
-
-
-        .incident-name {
-
-            font-size: 18px;
-
-            font-weight: bold;
-
-            margin-top: 5px;
-        }
-
-
-        .badge {
-
-            padding: 5px 10px;
-
-            border-radius: 20px;
-
-            font-size: 11px;
-
-            font-weight: bold;
-
-            text-transform: uppercase;
-        }
-
-
-        .badge-critical {
-
-            background: #451a1a;
-
-            color: #f87171;
-        }
-
-
-        .badge-warning {
-
-            background: #422006;
-
-            color: #fbbf24;
-        }
-
-
-        .badge-firing {
-
-            background: #451a1a;
-
-            color: #f87171;
-        }
-
-
-        .badge-resolved {
-
-            background: #14532d;
-
-            color: #4ade80;
-        }
-
-
-        .incident-info {
-
-            display: grid;
-
-            grid-template-columns:
-                repeat(3, 1fr);
-
-            gap: 15px;
-
-            margin-top: 18px;
-        }
-
-
-        .info-box {
-
-            background: #10131a;
-
-            padding: 12px;
-
-            border-radius: 8px;
-        }
-
-
-        .info-label {
-
-            color: #8f98a8;
-
-            font-size: 11px;
-
-            margin-bottom: 5px;
-        }
-
-
-        .info-value {
-
-            font-weight: bold;
-
-            font-size: 14px;
-        }
-
-
-        .incident-description {
-
-            margin-top: 18px;
-
-            color: #c8ced8;
-
-            line-height: 1.6;
-        }
-
-
-        .empty-incidents {
-
-            background: #171a21;
-
-            border: 1px solid #292f3a;
-
-            border-radius: 12px;
-
-            padding: 50px;
-
-            text-align: center;
-
-            color: #8f98a8;
-        }
-
-
-        /* =====================================================
-           APPROVAL
-        ===================================================== */
-
-        .approval {
-
-            margin: 20px 10% 25px 0;
-
-            padding: 22px;
-
-            border: 1px solid #8b5cf6;
-
-            background: #191622;
-
-            border-radius: 12px;
-        }
-
-
-        .approval-title {
-
-            font-size: 19px;
-
-            font-weight: bold;
-
-            margin-bottom: 18px;
-        }
-
-
-        .approval-warning {
-
-            background: #241f2e;
-
-            padding: 12px;
-
-            border-radius: 7px;
-
-            margin-bottom: 18px;
-
-            color: #d5c9ff;
-        }
-
-
-        .approval-info {
-
-            line-height: 1.8;
-
-            margin-bottom: 20px;
-        }
-
-
-        .label {
-
-            color: #8f98a8;
-        }
-
-
-        .value {
-
-            font-weight: bold;
-        }
-
-
-        /* =====================================================
-           BUTTONS
-        ===================================================== */
-
-        button {
-
-            border: none;
-
-            padding: 12px 20px;
-
-            border-radius: 7px;
-
-            cursor: pointer;
-
-            font-weight: bold;
-
-            font-size: 14px;
-        }
-
-
-        button:disabled {
-
-            opacity: 0.5;
-
-            cursor: not-allowed;
-        }
-
-
-        .approve {
-
-            background: #22c55e;
-
-            color: #07130b;
-
-            margin-right: 10px;
-        }
-
-
-        .reject {
-
-            background: #ef4444;
-
-            color: white;
-        }
-
-
-        /* =====================================================
-           INPUT
-        ===================================================== */
-
-        .input-area {
-
-            padding: 20px;
-
-            border-top: 1px solid #2a2f3a;
-
-            display: flex;
-
             gap: 10px;
+            position: sticky;
+            bottom: 0;
+            background: #0f1117;
+            padding-top: 15px;
         }
 
-
-        textarea {
-
+        .chat-input input {
             flex: 1;
-
-            resize: none;
-
-            height: 55px;
-
+            padding: 14px;
             background: #171a21;
-
+            border: 1px solid #343946;
+            border-radius: 6px;
             color: white;
-
-            border: 1px solid #303644;
-
-            border-radius: 8px;
-
-            padding: 15px;
-
-            font-size: 15px;
-
             outline: none;
         }
 
-
-        textarea:focus {
-
-            border-color: #4f46e5;
+        button {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
         }
 
-
-        .send {
-
-            background: #4f46e5;
-
+        .send-btn {
+            background: #3b82f6;
             color: white;
-
-            width: 90px;
         }
 
+        .send-btn:hover {
+            background: #2563eb;
+        }
 
-        /* =====================================================
-           RESPONSIVE
-        ===================================================== */
+        /* =========================
+           INCIDENTS
+        ========================== */
 
-        @media (max-width: 700px) {
+        #incidentPanel {
+            display: none;
+            max-width: 1200px;
+            margin: auto;
+        }
 
+        .incident-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .incident-header h2 {
+            margin: 0;
+        }
+
+        .refresh-text {
+            color: #7f8796;
+            font-size: 12px;
+        }
+
+        .incident-card {
+            background: #171a21;
+            border: 1px solid #2b2f3a;
+            border-radius: 8px;
+            margin-bottom: 18px;
+            overflow: hidden;
+        }
+
+        .incident-card-header {
+            padding: 16px 18px;
+            border-bottom: 1px solid #2b2f3a;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .incident-title {
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .incident-id {
+            color: #7f8796;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+
+        .severity-critical {
+            background: #7f1d1d;
+            color: #fecaca;
+        }
+
+        .severity-warning {
+            background: #78350f;
+            color: #fed7aa;
+        }
+
+        .severity-info {
+            background: #1e3a8a;
+            color: #bfdbfe;
+        }
+
+        .badge {
+            padding: 5px 9px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
+        .incident-body {
+            padding: 18px;
+        }
+
+        .incident-meta {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .meta-box {
+            background: #11141b;
+            padding: 12px;
+            border-radius: 6px;
+        }
+
+        .meta-label {
+            font-size: 11px;
+            color: #7f8796;
+            margin-bottom: 5px;
+        }
+
+        .meta-value {
+            font-size: 13px;
+        }
+
+        /* =========================
+           AGENT STATUS
+        ========================== */
+
+        .agent-section {
+            margin-top: 15px;
+            border: 1px solid #303541;
+            border-radius: 7px;
+            overflow: hidden;
+        }
+
+        .agent-section-title {
+            padding: 12px 15px;
+            background: #1d212a;
+            font-weight: bold;
+        }
+
+        .agent-status {
+            padding: 12px 15px;
+            font-size: 13px;
+        }
+
+        .status-queued {
+            color: #facc15;
+        }
+
+        .status-investigating {
+            color: #60a5fa;
+        }
+
+        .status-completed {
+            color: #4ade80;
+        }
+
+        .status-waiting_for_approval {
+            color: #fb923c;
+        }
+
+        .status-failed {
+            color: #f87171;
+        }
+
+        .agent-response {
+            padding: 15px;
+            background: #11141b;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            font-size: 13px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        /* =========================
+           REMEDIATION
+        ========================== */
+
+        .remediation {
+            margin-top: 15px;
+            padding: 15px;
+            background: #241b12;
+            border: 1px solid #704214;
+            border-radius: 7px;
+        }
+
+        .remediation-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #fb923c;
+        }
+
+        .remediation-details {
+            font-size: 13px;
+            margin-bottom: 15px;
+            line-height: 1.6;
+        }
+
+        .approve-btn {
+            background: #16a34a;
+            color: white;
+            margin-right: 8px;
+        }
+
+        .approve-btn:hover {
+            background: #15803d;
+        }
+
+        .reject-btn {
+            background: #dc2626;
+            color: white;
+        }
+
+        .reject-btn:hover {
+            background: #b91c1c;
+        }
+
+        .verification {
+            margin-top: 15px;
+            padding: 15px;
+            background: #101b14;
+            border: 1px solid #245c35;
+            border-radius: 7px;
+        }
+
+        .verification-title {
+            color: #4ade80;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .empty-state {
+            padding: 50px;
+            text-align: center;
+            color: #737b8c;
+        }
+
+        .error {
+            color: #f87171;
+            padding: 15px;
+        }
+
+        @media (max-width: 800px) {
             .sidebar {
-
-                width: 170px;
+                width: 180px;
             }
 
-            .incident-info {
-
+            .incident-meta {
                 grid-template-columns: 1fr;
             }
-
         }
-
     </style>
-
 </head>
-
 
 <body>
 
+<div class="app">
 
-    <!-- =====================================================
-         HEADER
-    ===================================================== -->
+    <!-- =========================
+         SIDEBAR
+    ========================== -->
 
-    <div class="header">
+    <div class="sidebar">
 
-        <div class="title">
+        <div class="logo">
             DevOps Agent
         </div>
 
-        <div class="status">
-            GPT-OSS 120B
+        <div
+            id="chatNav"
+            class="nav-item active"
+            onclick="showChat()"
+        >
+            Chat
+        </div>
+
+        <div
+            id="incidentNav"
+            class="nav-item"
+            onclick="showIncidents()"
+        >
+            Incidents
+
+            <span
+                id="incidentBadge"
+                class="incident-badge"
+                style="display:none;"
+            >
+                0
+            </span>
+
         </div>
 
     </div>
 
 
-    <!-- =====================================================
-         LAYOUT
-    ===================================================== -->
+    <!-- =========================
+         MAIN
+    ========================== -->
 
-    <div class="layout">
+    <div class="main">
 
-
-        <!-- =================================================
-             SIDEBAR
-        ================================================= -->
-
-        <div class="sidebar">
-
-            <div class="nav-title">
-                Navigation
-            </div>
-
-
-            <div
-                id="chatNav"
-                class="nav-item active"
-                onclick="showChat()"
-            >
-                Chat
-            </div>
-
-
-            <div
-                id="incidentNav"
-                class="nav-item"
-                onclick="showIncidents()"
-            >
-
-                Incidents
-
-                <span
-                    id="incidentCount"
-                    class="incident-count"
-                    style="display:none;"
-                >
-                    0
-                </span>
-
-            </div>
-
+        <div class="header" id="pageTitle">
+            DevOps Agent
         </div>
 
-
-        <!-- =================================================
-             MAIN
-        ================================================= -->
-
-        <div class="main">
+        <div class="content">
 
 
-            <!-- =============================================
-                 CHAT
-            ============================================= -->
+            <!-- =========================
+                 CHAT PANEL
+            ========================== -->
 
-            <div id="chat">
+            <div id="chatPanel">
+
+                <div
+                    id="messages"
+                    class="messages"
+                ></div>
+
+                <div class="chat-input">
+
+                    <input
+                        id="messageInput"
+                        type="text"
+                        placeholder="Ask the DevOps Agent..."
+                        onkeydown="handleEnter(event)"
+                    >
+
+                    <button
+                        class="send-btn"
+                        onclick="sendMessage()"
+                    >
+                        Send
+                    </button>
+
+                </div>
 
             </div>
 
 
-            <!-- =============================================
+            <!-- =========================
                  INCIDENT PANEL
-            ============================================= -->
+            ========================== -->
 
             <div id="incidentPanel">
 
                 <div class="incident-header">
 
-                    <div class="incident-title">
-                        Incidents
+                    <div>
+                        <h2>Incidents</h2>
+
+                        <div class="refresh-text">
+                            Automatically detected by Alertmanager
+                        </div>
                     </div>
 
-                    <div
-                        id="refreshStatus"
-                        class="refresh-status"
-                    >
-                        Checking for incidents...
+                    <div class="refresh-text">
+                        Auto refresh: 5 seconds
                     </div>
 
                 </div>
-
 
                 <div id="incidentList">
 
+                    <div class="empty-state">
+                        No incidents detected.
+                    </div>
+
                 </div>
 
             </div>
-
-
-            <!-- =============================================
-                 INPUT
-            ============================================= -->
-
-            <div
-                id="inputArea"
-                class="input-area"
-            >
-
-                <textarea
-                    id="message"
-                    placeholder="Ask the DevOps Agent to investigate..."
-                ></textarea>
-
-
-                <button
-                    class="send"
-                    onclick="sendMessage()"
-                >
-                    Send
-                </button>
-
-            </div>
-
 
         </div>
 
     </div>
 
+</div>
+
 
 <script>
 
+    /* =====================================================
+       GLOBAL STATE
+    ===================================================== */
 
-// =========================================================
-// ELEMENTS
-// =========================================================
-
-const chat =
-    document.getElementById("chat");
+    let currentIncidents = [];
 
 
-const messageInput =
-    document.getElementById("message");
+    /* =====================================================
+       NAVIGATION
+    ===================================================== */
+
+    function showChat() {
+
+        document.getElementById("chatPanel").style.display = "block";
+        document.getElementById("incidentPanel").style.display = "none";
+
+        document.getElementById("chatNav").classList.add("active");
+        document.getElementById("incidentNav").classList.remove("active");
+
+        document.getElementById("pageTitle").innerText =
+            "DevOps Agent";
+    }
 
 
-const incidentPanel =
-    document.getElementById("incidentPanel");
+    function showIncidents() {
+
+        document.getElementById("chatPanel").style.display = "none";
+        document.getElementById("incidentPanel").style.display = "block";
+
+        document.getElementById("chatNav").classList.remove("active");
+        document.getElementById("incidentNav").classList.add("active");
+
+        document.getElementById("pageTitle").innerText =
+            "Incidents";
+
+        loadIncidents();
+    }
 
 
-const incidentList =
-    document.getElementById("incidentList");
+    /* =====================================================
+       CHAT
+    ===================================================== */
 
+    function handleEnter(event) {
 
-const incidentCount =
-    document.getElementById("incidentCount");
-
-
-const refreshStatus =
-    document.getElementById("refreshStatus");
-
-
-const inputArea =
-    document.getElementById("inputArea");
-
-
-const chatNav =
-    document.getElementById("chatNav");
-
-
-const incidentNav =
-    document.getElementById("incidentNav");
-
-
-// =========================================================
-// NAVIGATION
-// =========================================================
-
-function showChat() {
-
-    chat.style.display =
-        "block";
-
-    incidentPanel.style.display =
-        "none";
-
-    inputArea.style.display =
-        "flex";
-
-
-    chatNav.classList.add(
-        "active"
-    );
-
-    incidentNav.classList.remove(
-        "active"
-    );
-
-}
-
-
-function showIncidents() {
-
-    chat.style.display =
-        "none";
-
-    incidentPanel.style.display =
-        "block";
-
-    inputArea.style.display =
-        "none";
-
-
-    incidentNav.classList.add(
-        "active"
-    );
-
-    chatNav.classList.remove(
-        "active"
-    );
-
-
-    loadIncidents();
-
-}
-
-
-// =========================================================
-// ADD CHAT MESSAGE
-// =========================================================
-
-function addMessage(
-    text,
-    type
-) {
-
-    const div =
-        document.createElement(
-            "div"
-        );
-
-
-    div.className =
-        "message " + type;
-
-
-    div.innerText =
-        text;
-
-
-    chat.appendChild(
-        div
-    );
-
-
-    chat.scrollTop =
-        chat.scrollHeight;
-
-
-    return div;
-}
-
-
-// =========================================================
-// SEND MESSAGE
-// =========================================================
-
-async function sendMessage() {
-
-    const message =
-        messageInput.value.trim();
-
-
-    if (!message) {
-
-        return;
+        if (event.key === "Enter") {
+            sendMessage();
+        }
 
     }
 
 
-    addMessage(
-        message,
-        "user"
-    );
+    async function sendMessage() {
 
+        const input =
+            document.getElementById("messageInput");
 
-    messageInput.value =
-        "";
+        const message =
+            input.value.trim();
 
+        if (!message) {
+            return;
+        }
 
-    const loading =
+        addMessage("user-message", message);
+
+        input.value = "";
+
         addMessage(
-            "Investigating...",
-            "assistant loading"
+            "agent-message",
+            "DevOps Agent is thinking..."
         );
 
+        try {
 
-    try {
-
-        const response =
-            await fetch(
+            const response = await fetch(
                 "/chat",
                 {
-
-                    method:
-                        "POST",
-
+                    method: "POST",
                     headers: {
-
-                        "Content-Type":
-                            "application/json"
-
+                        "Content-Type": "application/json"
                     },
-
-                    body:
-                        JSON.stringify({
-
-                            message:
-                                message
-
-                        })
-
+                    body: JSON.stringify({
+                        message: message
+                    })
                 }
             );
 
+            const data = await response.json();
 
-        const data =
-            await response.json();
+            const messages =
+                document.getElementById("messages");
 
+            messages.removeChild(
+                messages.lastElementChild
+            );
 
-        loading.remove();
+            if (data.error) {
 
+                addMessage(
+                    "agent-message",
+                    "Error: " + data.error
+                );
 
-        if (data.error) {
+                return;
+            }
 
             addMessage(
-                "Error: " +
-                data.error,
-                "assistant"
+                "agent-message",
+                data.response || "No response received."
             );
+
+            if (data.pending_action) {
+
+                addApprovalMessage(
+                    data.action_id,
+                    data.pending_action
+                );
+
+            }
+
+        } catch (error) {
+
+            addMessage(
+                "agent-message",
+                "Request failed: " + error
+            );
+
+        }
+
+    }
+
+
+    function addMessage(className, text) {
+
+        const messages =
+            document.getElementById("messages");
+
+        const div =
+            document.createElement("div");
+
+        div.className =
+            "message " + className;
+
+        div.innerText = text;
+
+        messages.appendChild(div);
+
+        messages.scrollTop =
+            messages.scrollHeight;
+    }
+
+
+    function addApprovalMessage(actionId, action) {
+
+        const messages =
+            document.getElementById("messages");
+
+        const div =
+            document.createElement("div");
+
+        div.className =
+            "message agent-message";
+
+        div.innerHTML = `
+            <strong>Remediation requires approval</strong>
+
+            <br><br>
+
+            Tool:
+            ${escapeHtml(action.tool)}
+
+            <br>
+
+            Arguments:
+            ${escapeHtml(JSON.stringify(action.arguments))}
+
+            <br><br>
+
+            <button
+                class="approve-btn"
+                onclick="approveAction('${escapeHtml(actionId)}')"
+            >
+                Approve & Execute
+            </button>
+
+            <button
+                class="reject-btn"
+                onclick="rejectAction('${escapeHtml(actionId)}')"
+            >
+                Reject
+            </button>
+        `;
+
+        messages.appendChild(div);
+    }
+
+
+    async function approveAction(actionId) {
+
+        try {
+
+            const response = await fetch(
+                "/approve",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        action_id: actionId
+                    })
+                }
+            );
+
+            const data = await response.json();
+
+            addMessage(
+                "agent-message",
+                JSON.stringify(data, null, 2)
+            );
+
+            loadIncidents();
+
+        } catch (error) {
+
+            addMessage(
+                "agent-message",
+                "Approval failed: " + error
+            );
+
+        }
+
+    }
+
+
+    async function rejectAction(actionId) {
+
+        try {
+
+            const response = await fetch(
+                "/reject",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        action_id: actionId
+                    })
+                }
+            );
+
+            const data = await response.json();
+
+            addMessage(
+                "agent-message",
+                data.message || "Remediation rejected."
+            );
+
+            loadIncidents();
+
+        } catch (error) {
+
+            addMessage(
+                "agent-message",
+                "Reject failed: " + error
+            );
+
+        }
+
+    }
+
+
+    /* =====================================================
+       INCIDENT LOADING
+    ===================================================== */
+
+    async function loadIncidents() {
+
+        try {
+
+            const response =
+                await fetch("/incidents");
+
+            const data =
+                await response.json();
+
+            if (!data.success) {
+                return;
+            }
+
+            currentIncidents =
+                data.incidents || [];
+
+            updateIncidentBadge(
+                currentIncidents
+            );
+
+            renderIncidents(
+                currentIncidents
+            );
+
+        } catch (error) {
+
+            console.error(
+                "Failed to load incidents:",
+                error
+            );
+
+        }
+
+    }
+
+
+    /* =====================================================
+       INCIDENT BADGE
+    ===================================================== */
+
+    function updateIncidentBadge(incidents) {
+
+        const badge =
+            document.getElementById("incidentBadge");
+
+        const activeCount =
+            incidents.filter(
+                incident =>
+                    incident.status === "firing"
+            ).length;
+
+        if (activeCount > 0) {
+
+            badge.style.display = "inline-block";
+
+            badge.innerText =
+                activeCount;
+
+        } else {
+
+            badge.style.display = "none";
+
+        }
+
+    }
+
+
+    /* =====================================================
+       INCIDENT RENDERING
+    ===================================================== */
+
+    function renderIncidents(incidents) {
+
+        const container =
+            document.getElementById("incidentList");
+
+        if (!incidents.length) {
+
+            container.innerHTML = `
+                <div class="empty-state">
+                    No incidents detected.
+                </div>
+            `;
 
             return;
         }
 
 
-        addMessage(
-            data.response,
-            "assistant"
-        );
+        /*
+         * Newest incidents first
+         */
 
+        incidents =
+            [...incidents].reverse();
+
+
+        container.innerHTML =
+            incidents.map(
+                incident => renderIncident(incident)
+            ).join("");
+
+    }
+
+
+    function renderIncident(incident) {
+
+        const severity =
+            incident.severity || "unknown";
+
+        const severityClass =
+            severity === "critical"
+                ? "severity-critical"
+                : severity === "warning"
+                    ? "severity-warning"
+                    : "severity-info";
+
+
+        const agentStatus =
+            incident.agent_status || "unknown";
+
+        const statusClass =
+            "status-" +
+            agentStatus;
+
+
+        let remediationHTML = "";
 
         if (
-            data.pending_action
+            incident.agent_status ===
+                "waiting_for_approval"
+            &&
+            incident.pending_action
+            &&
+            incident.action_id
         ) {
 
-            showApproval(
-                data.action_id,
-                data.pending_action
-            );
+            const action =
+                incident.pending_action;
 
+            remediationHTML = `
+
+                <div class="remediation">
+
+                    <div class="remediation-title">
+                        Remediation Requires Approval
+                    </div>
+
+                    <div class="remediation-details">
+
+                        <strong>Tool:</strong>
+                        ${escapeHtml(action.tool)}
+
+                        <br>
+
+                        <strong>Arguments:</strong>
+                        ${escapeHtml(
+                            JSON.stringify(
+                                action.arguments
+                            )
+                        )}
+
+                        <br><br>
+
+                        The agent has proposed this
+                        action, but it has NOT been
+                        executed.
+
+                    </div>
+
+                    <button
+                        class="approve-btn"
+                        onclick="approveIncidentAction(
+                            '${escapeHtml(incident.action_id)}',
+                            '${escapeHtml(incident.id)}'
+                        )"
+                    >
+                        Approve & Execute
+                    </button>
+
+                    <button
+                        class="reject-btn"
+                        onclick="rejectIncidentAction(
+                            '${escapeHtml(incident.action_id)}',
+                            '${escapeHtml(incident.id)}'
+                        )"
+                    >
+                        Reject
+                    </button>
+
+                </div>
+            `;
         }
 
-    }
+
+        return `
+
+            <div class="incident-card">
+
+                <!-- INCIDENT HEADER -->
+
+                <div class="incident-card-header">
+
+                    <div>
+
+                        <div class="incident-title">
+
+                            ${escapeHtml(
+                                incident.summary ||
+                                incident.alertname
+                            )}
+
+                        </div>
+
+                        <div class="incident-id">
+
+                            ${escapeHtml(
+                                incident.id
+                            )}
+
+                        </div>
+
+                    </div>
+
+                    <div>
+
+                        <span
+                            class="badge ${severityClass}"
+                        >
+                            ${escapeHtml(
+                                severity.toUpperCase()
+                            )}
+                        </span>
+
+                    </div>
+
+                </div>
 
 
-    catch (error) {
+                <!-- INCIDENT BODY -->
 
-        loading.remove();
-
-
-        addMessage(
-            "Request failed: " +
-            error,
-            "assistant"
-        );
-
-    }
-
-}
+                <div class="incident-body">
 
 
-// =========================================================
-// LOAD INCIDENTS
-// =========================================================
+                    <!-- METADATA -->
 
-async function loadIncidents() {
+                    <div class="incident-meta">
 
-    try {
+                        <div class="meta-box">
 
-        const response =
-            await fetch(
-                "/incidents"
-            );
+                            <div class="meta-label">
+                                ALERT
+                            </div>
 
+                            <div class="meta-value">
+                                ${escapeHtml(
+                                    incident.alertname
+                                )}
+                            </div>
 
-        const data =
-            await response.json();
-
-
-        if (!data.success) {
-
-            return;
-
-        }
+                        </div>
 
 
-        const incidents =
-            data.incidents || [];
+                        <div class="meta-box">
+
+                            <div class="meta-label">
+                                INSTANCE
+                            </div>
+
+                            <div class="meta-value">
+                                ${escapeHtml(
+                                    incident.instance
+                                )}
+                            </div>
+
+                        </div>
 
 
-        updateIncidentCount(
-            incidents
-        );
+                        <div class="meta-box">
+
+                            <div class="meta-label">
+                                STATUS
+                            </div>
+
+                            <div class="meta-value">
+                                ${escapeHtml(
+                                    incident.status
+                                )}
+                            </div>
+
+                        </div>
+
+                    </div>
 
 
-        renderIncidents(
-            incidents
-        );
+                    <!-- DESCRIPTION -->
+
+                    <div>
+
+                        <div class="meta-label">
+                            ALERT DESCRIPTION
+                        </div>
+
+                        <div class="meta-value">
+                            ${escapeHtml(
+                                incident.description ||
+                                "No description available."
+                            )}
+                        </div>
+
+                    </div>
 
 
-        refreshStatus.innerText =
-            "Updated just now";
+                    <!-- AGENT -->
 
-    }
+                    <div class="agent-section">
 
+                        <div class="agent-section-title">
 
-    catch (error) {
+                            GPT-OSS 120B
+                            Investigation
 
-        refreshStatus.innerText =
-            "Unable to load incidents";
-
-        console.error(
-            error
-        );
-
-    }
-
-}
+                        </div>
 
 
-// =========================================================
-// INCIDENT COUNT
-// =========================================================
+                        <div
+                            class="agent-status ${statusClass}"
+                        >
 
-function updateIncidentCount(
-    incidents
-) {
+                            Agent Status:
+                            <strong>
+                                ${escapeHtml(
+                                    agentStatus
+                                )}
+                            </strong>
 
-    const activeIncidents =
-        incidents.filter(
-            incident =>
-                incident.status ===
-                "firing"
-        ).length;
+                            <br>
 
+                            ${
+                                escapeHtml(
+                                    incident.agent_message ||
+                                    ""
+                                )
+                            }
 
-    if (
-        activeIncidents > 0
-    ) {
-
-        incidentCount.style.display =
-            "inline-block";
-
-
-        incidentCount.innerText =
-            activeIncidents;
-
-    }
-
-    else {
-
-        incidentCount.style.display =
-            "none";
-
-    }
-
-}
+                        </div>
 
 
-// =========================================================
-// RENDER INCIDENTS
-// =========================================================
+                        ${
+                            incident.agent_response
+                            ?
+                            `
+                            <div class="agent-response">
 
-function renderIncidents(
-    incidents
-) {
+                                ${escapeHtml(
+                                    incident.agent_response
+                                )}
 
-    incidentList.innerHTML =
-        "";
+                            </div>
+                            `
+                            :
+                            ""
+                        }
+
+                    </div>
 
 
-    if (
-        incidents.length === 0
-    ) {
+                    <!-- REMEDIATION -->
 
-        incidentList.innerHTML = `
+                    ${remediationHTML}
 
-            <div class="empty-incidents">
 
-                No incidents detected.
+                    ${
+                        incident.agent_error
+                        ?
+                        `
+                        <div class="error">
+
+                            Agent Error:
+                            ${escapeHtml(
+                                incident.agent_error
+                            )}
+
+                        </div>
+                        `
+                        :
+                        ""
+                    }
+
+                </div>
 
             </div>
 
         `;
 
-        return;
-
     }
 
 
-    // Newest first
+    /* =====================================================
+       INCIDENT APPROVAL
+    ===================================================== */
 
-    incidents
-        .slice()
-        .reverse()
-        .forEach(
-            incident => {
+    async function approveIncidentAction(
+        actionId,
+        incidentId
+    ) {
 
-                const card =
-                    document.createElement(
-                        "div"
-                    );
+        if (
+            !confirm(
+                "Are you sure you want to execute this remediation?"
+            )
+        ) {
+            return;
+        }
 
 
-                card.className =
-                    "incident-card";
+        try {
 
+            const response =
+                await fetch(
+                    "/approve",
+                    {
+                        method: "POST",
 
-                const severity =
-                    incident.severity ||
-                    "unknown";
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
 
+                        body: JSON.stringify({
+                            action_id: actionId
+                        })
+                    }
+                );
 
-                const status =
-                    incident.status ||
-                    "unknown";
 
+            const data =
+                await response.json();
 
-                let badgeClass =
-                    "badge-warning";
 
+            /*
+             * Refresh incident information
+             */
 
-                if (
-                    severity ===
-                    "critical"
-                ) {
+            await loadIncidents();
 
-                    badgeClass =
-                        "badge-critical";
 
-                }
+            /*
+             * Show verification in incident
+             */
 
+            if (data.success) {
 
-                if (
-                    status ===
-                    "resolved"
-                ) {
+                alert(
+                    "Remediation executed successfully."
+                );
 
-                    badgeClass =
-                        "badge-resolved";
+            } else {
 
-                }
-
-
-                card.innerHTML = `
-
-                    <div class="incident-top">
-
-                        <div>
-
-                            <div class="incident-id">
-
-                                ${escapeHtml(
-                                    incident.id
-                                )}
-
-                            </div>
-
-                            <div class="incident-name">
-
-                                ${escapeHtml(
-                                    incident.summary ||
-                                    incident.alertname
-                                )}
-
-                            </div>
-
-                        </div>
-
-
-                        <div>
-
-                            <span
-                                class="badge ${badgeClass}"
-                            >
-
-                                ${escapeHtml(
-                                    status
-                                )}
-
-                            </span>
-
-                        </div>
-
-                    </div>
-
-
-                    <div class="incident-description">
-
-                        ${escapeHtml(
-                            incident.description ||
-                            "No description available."
-                        )}
-
-                    </div>
-
-
-                    <div class="incident-info">
-
-
-                        <div class="info-box">
-
-                            <div class="info-label">
-                                Alert
-                            </div>
-
-                            <div class="info-value">
-
-                                ${escapeHtml(
-                                    incident.alertname
-                                )}
-
-                            </div>
-
-                        </div>
-
-
-                        <div class="info-box">
-
-                            <div class="info-label">
-                                Severity
-                            </div>
-
-                            <div class="info-value">
-
-                                ${escapeHtml(
-                                    severity
-                                )}
-
-                            </div>
-
-                        </div>
-
-
-                        <div class="info-box">
-
-                            <div class="info-label">
-                                Instance
-                            </div>
-
-                            <div class="info-value">
-
-                                ${escapeHtml(
-                                    incident.instance
-                                )}
-
-                            </div>
-
-                        </div>
-
-
-                    </div>
-
-                `;
-
-
-                incidentList.appendChild(
-                    card
+                alert(
+                    "Remediation failed: " +
+                    (data.error || "Unknown error")
                 );
 
             }
-        );
 
-}
+        } catch (error) {
 
+            alert(
+                "Approval request failed: " +
+                error
+            );
 
-// =========================================================
-// HTML ESCAPE
-// =========================================================
-
-function escapeHtml(
-    value
-) {
-
-    if (
-        value === null ||
-        value === undefined
-    ) {
-
-        return "";
+        }
 
     }
 
 
-    return String(value)
+    async function rejectIncidentAction(
+        actionId,
+        incidentId
+    ) {
 
-        .replace(
-            /&/g,
-            "&amp;"
-        )
+        try {
 
-        .replace(
-            /</g,
-            "&lt;"
-        )
+            const response =
+                await fetch(
+                    "/reject",
+                    {
+                        method: "POST",
 
-        .replace(
-            />/g,
-            "&gt;"
-        )
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
 
-        .replace(
-            /"/g,
-            "&quot;"
-        )
-
-        .replace(
-            /'/g,
-            "&#039;"
-        );
-
-}
+                        body: JSON.stringify({
+                            action_id: actionId
+                        })
+                    }
+                );
 
 
-// =========================================================
-// SHOW APPROVAL
-// =========================================================
-
-function showApproval(
-    actionId,
-    action
-) {
-
-    const box =
-        document.createElement(
-            "div"
-        );
+            const data =
+                await response.json();
 
 
-    box.className =
-        "approval";
+            await loadIncidents();
 
 
-    const pid =
-        action.arguments.pid;
+            alert(
+                data.message ||
+                "Remediation rejected."
+            );
 
 
-    box.innerHTML = `
+        } catch (error) {
 
-        <div class="approval-title">
+            alert(
+                "Reject failed: " +
+                error
+            );
 
-            Remediation Required
+        }
 
-        </div>
-
-
-        <div class="approval-warning">
-
-            The DevOps Agent has identified
-            a remediation action.
-
-            Human approval is required
-            before making the change.
-
-        </div>
+    }
 
 
-        <div class="approval-info">
+    /* =====================================================
+       SECURITY
+    ===================================================== */
 
-            <div>
+    function escapeHtml(value) {
 
-                <span class="label">
-                    Action:
-                </span>
+        if (value === null ||
+            value === undefined) {
+            return "";
+        }
 
-                <span class="value">
-                    Terminate Process
-                </span>
+        return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
 
-            </div>
-
-
-            <div>
-
-                <span class="label">
-                    Process:
-                </span>
-
-                <span class="value">
-                    ${escapeHtml(
-                        action.description
-                    )}
-                </span>
-
-            </div>
+    }
 
 
-            <div>
+    /* =====================================================
+       AUTO REFRESH
+    ===================================================== */
 
-                <span class="label">
-                    PID:
-                </span>
+    /*
+     * This is important.
+     *
+     * Alertmanager creates the incident.
+     *
+     * Flask starts GPT-OSS investigation
+     * in the background.
+     *
+     * The browser polls every 5 seconds.
+     *
+     * Therefore the UI changes automatically:
+     *
+     * queued
+     *    ↓
+     * investigating
+     *    ↓
+     * completed
+     *
+     * OR
+     *
+     * waiting_for_approval
+     */
 
-                <span class="value">
-                    ${pid}
-                </span>
-
-            </div>
-
-        </div>
-
-
-        <button
-            class="approve"
-            onclick="approveAction(
-                '${actionId}',
-                this
-            )"
-        >
-            Approve & Execute
-        </button>
-
-
-        <button
-            class="reject"
-            onclick="rejectAction(
-                '${actionId}',
-                this
-            )"
-        >
-            Reject
-        </button>
-
-    `;
-
-
-    chat.appendChild(
-        box
+    setInterval(
+        loadIncidents,
+        5000
     );
 
 
-    chat.scrollTop =
-        chat.scrollHeight;
-
-}
-
-
-// =========================================================
-// APPROVE
-// =========================================================
-
-async function approveAction(
-    actionId,
-    button
-) {
-
-    button.disabled =
-        true;
-
-
-    button.innerText =
-        "Executing...";
-
-
-    try {
-
-        const response =
-            await fetch(
-                "/approve",
-                {
-
-                    method:
-                        "POST",
-
-                    headers: {
-
-                        "Content-Type":
-                            "application/json"
-
-                    },
-
-                    body:
-                        JSON.stringify({
-
-                            action_id:
-                                actionId
-
-                        })
-
-                }
-            );
-
-
-        const data =
-            await response.json();
-
-
-        if (
-            data.success
-        ) {
-
-            addMessage(
-
-                "REMEDIATION EXECUTED\n\n" +
-
-                JSON.stringify(
-                    data.result,
-                    null,
-                    2
-                ),
-
-                "assistant"
-
-            );
-
-
-            addMessage(
-
-                "VERIFICATION\n\n" +
-
-                JSON.stringify(
-                    data.verification.server,
-                    null,
-                    2
-                ),
-
-                "assistant"
-
-            );
-
-
-            const processes =
-                data.verification
-                    .processes;
-
-
-            const topProcesses =
-                processes.processes
-                    .slice(
-                        0,
-                        5
-                    );
-
-
-            addMessage(
-
-                "Top processes after remediation:\n\n" +
-
-                JSON.stringify(
-                    topProcesses,
-                    null,
-                    2
-                ),
-
-                "assistant"
-
-            );
-
-        }
-
-        else {
-
-            addMessage(
-
-                "REMEDIATION FAILED\n\n" +
-
-                JSON.stringify(
-                    data,
-                    null,
-                    2
-                ),
-
-                "assistant"
-
-            );
-
-        }
-
-
-        button.parentElement.remove();
-
-    }
-
-
-    catch (error) {
-
-        button.disabled =
-            false;
-
-
-        button.innerText =
-            "Approve & Execute";
-
-
-        addMessage(
-
-            "Approval failed: " +
-            error,
-
-            "assistant"
-
-        );
-
-    }
-
-}
-
-
-// =========================================================
-// REJECT
-// =========================================================
-
-async function rejectAction(
-    actionId,
-    button
-) {
-
-    button.disabled =
-        true;
-
-
-    try {
-
-        await fetch(
-            "/reject",
-            {
-
-                method:
-                    "POST",
-
-                headers: {
-
-                    "Content-Type":
-                        "application/json"
-
-                },
-
-                body:
-                    JSON.stringify({
-
-                        action_id:
-                            actionId
-
-                    })
-
-            }
-        );
-
-
-        button.parentElement.remove();
-
-
-        addMessage(
-
-            "REMEDIATION REJECTED\n\n" +
-            "No changes were made to the server.",
-
-            "assistant"
-
-        );
-
-    }
-
-
-    catch (error) {
-
-        addMessage(
-
-            "Reject failed: " +
-            error,
-
-            "assistant"
-
-        );
-
-    }
-
-}
-
-
-// =========================================================
-// ENTER KEY
-// =========================================================
-
-messageInput.addEventListener(
-    "keydown",
-    function(event) {
-
-        if (
-            event.key === "Enter" &&
-            !event.shiftKey
-        ) {
-
-            event.preventDefault();
-
-            sendMessage();
-
-        }
-
-    }
-);
-
-
-// =========================================================
-// AUTOMATIC INCIDENT REFRESH
-// =========================================================
-//
-// Check the backend every 5 seconds.
-//
-// This means:
-//
-// Alertmanager
-//      ↓
-// Flask
-//      ↓
-// incidents dictionary
-//      ↓
-// Browser checks /incidents
-//      ↓
-// Incident appears automatically
-//
-
-setInterval(
-    loadIncidents,
-    5000
-);
-
-
-// Initial load
-
-loadIncidents();
-
+    /*
+     * Load incidents immediately
+     * when the page opens.
+     */
+
+    loadIncidents();
 
 </script>
 
 </body>
-
 </html>
