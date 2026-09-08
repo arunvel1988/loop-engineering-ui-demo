@@ -881,7 +881,8 @@ def chat():
 
         result = run_agent(
             message,
-            conversation_history=history
+            conversation_history=history,
+            conversation_id=conversation_id
         )
 
 
