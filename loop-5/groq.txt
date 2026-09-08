@@ -1,3 +1,5 @@
+How do I investigate high CPU?
+What process is using the most CPU right now?
 ###############################################
 My application is called ecommerce-app and I use Docker Compose to run it.
 ###############################################
