@@ -50,7 +50,7 @@ import asyncio
 import threading
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import streamablehttp_client
 
 
 def _run_async(coro):
@@ -81,7 +81,7 @@ def _run_async(coro):
 
 async def _discover_mcp_tools():
     """Connect to MCP and convert discovered tools to Groq tool format."""
-    async with streamable_http_client(MCP_SERVER_URL) as (
+    async with streamablehttp_client(MCP_SERVER_URL) as (
         read_stream,
         write_stream,
         _,
