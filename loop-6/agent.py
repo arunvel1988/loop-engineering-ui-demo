@@ -2,7 +2,6 @@ import json
 
 from groq import Groq
 
-from tools import TOOL_FUNCTIONS
 from memory import save_memory, search_memory
 from rag import search_knowledge
 
@@ -40,176 +39,343 @@ MAX_RAG_CHUNK_CHARS = 1800
 
 
 # ============================================================
-# TOOLS
+# MCP CONFIGURATION
 # ============================================================
 
-TOOLS = [
+MCP_SERVER_URL = "http://127.0.0.1:8080/mcp"
 
-    # --------------------------------------------------------
-    # SERVER
-    # --------------------------------------------------------
+import asyncio
+import threading
+import traceback
 
-    {
-        "type": "function",
-        "function": {
-            "name": "check_server",
-            "description": (
-                "Check current CPU, memory and disk usage "
-                "of the server."
-            ),
-            "parameters": {
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+
+_MCP_SESSION = None
+_MCP_STREAM_CONTEXT = None
+_MCP_CLIENT_CONTEXT = None
+_MCP_LOCK = threading.Lock()
+_MCP_TOOLS = []
+
+
+def _run_async(coro):
+    """Run an async MCP coroutine from synchronous Flask code."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result = {}
+    error = {}
+
+    def runner():
+        try:
+            result["value"] = asyncio.run(coro)
+        except Exception as exc:
+            error["value"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "value" in error:
+        raise error["value"]
+
+    return result.get("value")
+
+
+async def _mcp_connect_async():
+    """Create and initialize one MCP Streamable HTTP session."""
+    global _MCP_SESSION
+    global _MCP_STREAM_CONTEXT
+    global _MCP_CLIENT_CONTEXT
+
+    if _MCP_SESSION is not None:
+        return _MCP_SESSION
+
+    _MCP_STREAM_CONTEXT = streamablehttp_client(
+        MCP_SERVER_URL
+    )
+
+    read_stream, write_stream, _ = (
+        await _MCP_STREAM_CONTEXT.__aenter__()
+    )
+
+    _MCP_CLIENT_CONTEXT = ClientSession(
+        read_stream,
+        write_stream,
+    )
+
+    await _MCP_CLIENT_CONTEXT.__aenter__()
+    await _MCP_CLIENT_CONTEXT.initialize()
+
+    _MCP_SESSION = _MCP_CLIENT_CONTEXT
+
+    return _MCP_SESSION
+
+
+async def _mcp_disconnect_async():
+    """Close the MCP connection and reset its state."""
+    global _MCP_SESSION
+    global _MCP_STREAM_CONTEXT
+    global _MCP_CLIENT_CONTEXT
+
+    try:
+        if _MCP_CLIENT_CONTEXT is not None:
+            await _MCP_CLIENT_CONTEXT.__aexit__(
+                None, None, None
+            )
+    finally:
+        try:
+            if _MCP_STREAM_CONTEXT is not None:
+                await _MCP_STREAM_CONTEXT.__aexit__(
+                    None, None, None
+                )
+        finally:
+            _MCP_SESSION = None
+            _MCP_STREAM_CONTEXT = None
+            _MCP_CLIENT_CONTEXT = None
+
+
+async def _discover_mcp_tools_async():
+    """Discover MCP tools and convert them to Groq schemas."""
+    session = await _mcp_connect_async()
+    response = await session.list_tools()
+
+    tools = []
+
+    for tool in response.tools:
+        schema = getattr(tool, "inputSchema", None)
+
+        if schema is None:
+            schema = {
                 "type": "object",
                 "properties": {},
-                "required": []
+                "required": [],
             }
+
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": (
+                    tool.description
+                    or f"MCP tool: {tool.name}"
+                ),
+                "parameters": schema,
+            },
+        })
+
+    return tools
+
+
+def get_mcp_tools():
+    """Discover tools from the external MCP server."""
+    global _MCP_TOOLS
+
+    with _MCP_LOCK:
+        try:
+            _MCP_TOOLS = _run_async(
+                _discover_mcp_tools_async()
+            )
+
+            print(
+                f"[MCP] Discovered {len(_MCP_TOOLS)} tools."
+            )
+
+            return _MCP_TOOLS
+
+        except Exception:
+            print("[MCP] Tool discovery failed:")
+            traceback.print_exc()
+
+            try:
+                _run_async(_mcp_disconnect_async())
+            except Exception:
+                pass
+
+            _MCP_TOOLS = []
+            return []
+
+
+async def _call_mcp_tool_async(tool_name, arguments):
+    """Call a tool through the persistent MCP session."""
+    session = await _mcp_connect_async()
+
+    result = await session.call_tool(
+        tool_name,
+        arguments=arguments,
+    )
+
+    output = []
+
+    for content in result.content:
+        if hasattr(content, "text"):
+            try:
+                output.append(json.loads(content.text))
+            except (json.JSONDecodeError, TypeError):
+                output.append(content.text)
+
+        elif hasattr(content, "model_dump"):
+            output.append(content.model_dump())
+
+        else:
+            output.append(str(content))
+
+    if len(output) == 1:
+        return output[0]
+
+    return output
+
+
+def call_mcp_tool(tool_name, arguments):
+    """Synchronous wrapper used by the agent tool loop."""
+    with _MCP_LOCK:
+        try:
+            return _run_async(
+                _call_mcp_tool_async(
+                    tool_name,
+                    arguments,
+                )
+            )
+
+        except Exception:
+            print(
+                f"[MCP] Tool call failed: {tool_name}"
+            )
+            traceback.print_exc()
+
+            try:
+                _run_async(_mcp_disconnect_async())
+            except Exception:
+                pass
+
+            raise
+
+
+# ============================================================
+# LOCAL HISTORICAL INCIDENT TOOL
+# ============================================================
+
+INCIDENT_DB_PATH = "devops_agent.db"
+
+
+def search_previous_incidents(
+    alertname=None,
+    severity=None,
+    limit=5,
+):
+    """Search historical incidents in the local SQLite database."""
+
+    try:
+        limit = max(1, min(int(limit or 5), 10))
+
+        import sqlite3
+
+        conn = sqlite3.connect(INCIDENT_DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        query = """
+            SELECT
+                id,
+                alertname,
+                severity,
+                status,
+                summary,
+                description,
+                agent_response,
+                remediation_status,
+                remediation_result,
+                verification,
+                created_at
+            FROM incidents
+            WHERE 1=1
+        """
+
+        params = []
+
+        if alertname:
+            query += " AND alertname = ?"
+            params.append(alertname)
+
+        if severity:
+            query += " AND severity = ?"
+            params.append(severity)
+
+        query += """
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+
+        params.append(limit)
+
+        rows = conn.execute(
+            query,
+            params,
+        ).fetchall()
+
+        conn.close()
+
+        results = []
+
+        for row in rows:
+            item = dict(row)
+
+            response = item.get("agent_response")
+
+            if response and len(response) > 1000:
+                item["agent_response"] = (
+                    response[:1000] + "..."
+                )
+
+            results.append(item)
+
+        return results
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
         }
-    },
 
-    # --------------------------------------------------------
-    # PROCESSES
-    # --------------------------------------------------------
 
-    {
-        "type": "function",
-        "function": {
-            "name": "check_processes",
-            "description": (
-                "List the current top processes sorted by "
-                "CPU usage. Use this to identify runaway "
-                "or CPU-intensive processes."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # PORTS
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "check_ports",
-            "description": (
-                "Check current listening network ports "
-                "on the server."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # DOCKER
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "check_docker",
-            "description": (
-                "Check current Docker containers and their "
-                "current state."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # PREVIOUS INCIDENTS
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "search_previous_incidents",
-            "description": (
-                "Search previous DevOps incidents stored in "
-                "the incident database. Use this during incident "
-                "investigation to look for similar past incidents, "
-                "previous root causes and previous remediation "
-                "results. Historical incidents are supporting "
-                "evidence only and must never be treated as proof "
-                "of the current root cause."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-
-                    "alertname": {
-                        "type": "string",
-                        "description": (
-                            "Alert name such as HighCPU."
-                        )
-                    },
-
-                    "severity": {
-                        "type": "string",
-                        "description": (
-                            "Optional severity such as "
-                            "critical or warning."
-                        )
-                    },
-
-                    "limit": {
-                        "type": "integer",
-                        "description": (
-                            "Maximum number of previous "
-                            "incidents. Keep this small."
-                        )
-                    }
+HISTORY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_previous_incidents",
+        "description": (
+            "Search previous DevOps incidents stored in the "
+            "incident database. Use this during investigation "
+            "to find similar past incidents, previous root "
+            "causes and remediation results. Historical "
+            "incidents are supporting evidence only."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "alertname": {
+                    "type": "string",
+                    "description": "Alert name such as HighCPU.",
                 },
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # TERMINATE PROCESS
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "terminate_process",
-            "description": (
-                "Request termination of a specific process "
-                "by PID when investigation shows that the "
-                "process is causing the incident. This is a "
-                "remediation proposal. The application intercepts "
-                "this request and requires human approval before "
-                "actually terminating the process."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-
-                    "pid": {
-                        "type": "integer",
-                        "description": (
-                            "PID of the process that should "
-                            "be terminated."
-                        )
-                    }
+                "severity": {
+                    "type": "string",
+                    "description": (
+                        "Optional severity such as "
+                        "critical or warning."
+                    ),
                 },
-                "required": [
-                    "pid"
-                ]
-            }
-        }
-    }
-]
+                "limit": {
+                    "type": "integer",
+                    "description": (
+                        "Maximum number of previous incidents."
+                    ),
+                },
+            },
+            "required": [],
+        },
+    },
+}
 
 
 # ============================================================
@@ -498,20 +664,19 @@ For infrastructure incidents:
 7. AVAILABLE TOOLS
 ===========================================================
 
-Current infrastructure:
+Infrastructure tools are provided dynamically by the external
+MCP server.
 
-- check_server
-- check_processes
-- check_ports
-- check_docker
+The MCP server provides tools for Linux/server inspection,
+process inspection, network ports, Docker, systemd services,
+and remediation actions.
 
 Historical operational memory:
 
 - search_previous_incidents
 
-Remediation:
-
-- terminate_process
+The infrastructure tools are MCP tools. Use the tool
+descriptions supplied by the MCP server.
 
 
 ===========================================================
@@ -1110,7 +1275,7 @@ def run_agent(
     - short-term conversation memory
     - long-term ChromaDB memory
     - RAG knowledge from PDF documents
-    - DevOps tools
+    - MCP-provided DevOps tools
     - human-approved remediation
     """
 
@@ -1228,6 +1393,25 @@ def run_agent(
 
 
     # ========================================================
+    # MCP TOOL DISCOVERY
+    # ========================================================
+
+    mcp_tools = get_mcp_tools()
+
+    if not mcp_tools:
+        return {
+            "response": (
+                "I could not connect to the DevOps MCP server. "
+                "Please make sure mcp_server.py is running at "
+                "http://127.0.0.1:8080/mcp."
+            ),
+            "pending_action": None,
+        }
+
+    available_tools = mcp_tools + [HISTORY_TOOL]
+
+
+    # ========================================================
     # AGENT TOOL LOOP
     # ========================================================
 
@@ -1236,7 +1420,7 @@ def run_agent(
         response = client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            tools=TOOLS,
+            tools=available_tools,
             tool_choice="auto",
             temperature=0.2,
             max_completion_tokens=2048,
@@ -1324,50 +1508,35 @@ def run_agent(
 
 
             # =================================================
-            # DESTRUCTIVE REMEDIATION
+            # HUMAN-APPROVAL REMEDIATION
             # =================================================
 
             if tool_name == "terminate_process":
 
-                pid = arguments.get(
-                    "pid"
-                )
-
+                pid = arguments.get("pid")
 
                 if pid is None:
 
                     result = {
                         "success": False,
                         "requires_approval": False,
-                        "error": "No PID was provided."
+                        "error": "No PID was provided.",
                     }
-
 
                 else:
 
                     try:
+                        pid = int(pid)
 
-                        pid = int(
-                            pid
-                        )
-
-                    except (
-                        ValueError,
-                        TypeError
-                    ):
+                    except (ValueError, TypeError):
 
                         result = {
                             "success": False,
                             "requires_approval": False,
-                            "error": "Invalid PID."
+                            "error": "Invalid PID.",
                         }
 
-
                     else:
-
-                        # ------------------------------------
-                        # Never terminate PID 1
-                        # ------------------------------------
 
                         if pid == 1:
 
@@ -1376,24 +1545,20 @@ def run_agent(
                                 "requires_approval": False,
                                 "error": (
                                     "PID 1 cannot be terminated."
-                                )
+                                ),
                             }
-
 
                         else:
 
                             pending_action = {
-                                "tool": (
-                                    "terminate_process"
-                                ),
+                                "tool": "terminate_process",
                                 "arguments": {
-                                    "pid": pid
+                                    "pid": pid,
                                 },
                                 "description": (
                                     f"Terminate process PID {pid}"
-                                )
+                                ),
                             }
-
 
                             result = {
                                 "success": False,
@@ -1402,44 +1567,66 @@ def run_agent(
                                 "message": (
                                     f"Termination of PID {pid} "
                                     "requires human approval."
-                                )
+                                ),
                             }
 
 
             # =================================================
-            # READ-ONLY TOOL
+            # LOCAL HISTORICAL INCIDENT SEARCH
+            # =================================================
+
+            elif tool_name == "search_previous_incidents":
+
+                try:
+                    result = search_previous_incidents(
+                        **arguments
+                    )
+
+                except Exception as e:
+                    result = {
+                        "success": False,
+                        "error": str(e),
+                    }
+
+
+            # =================================================
+            # MCP INFRASTRUCTURE TOOL
             # =================================================
 
             else:
 
-                function = TOOL_FUNCTIONS.get(
-                    tool_name
-                )
+                mcp_tool_names = {
+                    item["function"]["name"]
+                    for item in mcp_tools
+                }
 
-
-                if not function:
+                if tool_name not in mcp_tool_names:
 
                     result = {
                         "success": False,
                         "error": (
-                            f"Unknown tool: {tool_name}"
-                        )
+                            f"Unknown MCP tool: "
+                            f"{tool_name}"
+                        ),
                     }
-
 
                 else:
 
                     try:
 
-                        result = function(
-                            **arguments
+                        result = call_mcp_tool(
+                            tool_name,
+                            arguments,
                         )
 
                     except Exception as e:
 
                         result = {
                             "success": False,
-                            "error": str(e)
+                            "error": (
+                                f"MCP tool '{tool_name}' "
+                                f"failed: {e}"
+                            ),
                         }
 
 
