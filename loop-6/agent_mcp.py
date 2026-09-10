@@ -119,7 +119,7 @@ async def _discover_mcp_tools():
 
 async def _call_mcp_tool(tool_name, arguments):
     """Call one tool on the external MCP server."""
-    async with streamable_http_client(MCP_SERVER_URL) as (
+    async with streamablehttp_client(MCP_SERVER_URL) as (
         read_stream,
         write_stream,
         _,
