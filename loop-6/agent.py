@@ -42,7 +42,7 @@ MAX_RAG_CHUNK_CHARS = 1800
 # MCP CONFIGURATION
 # ============================================================
 
-MCP_SERVER_URL = "http://127.0.0.1:8080/mcp"
+MCP_SERVER_URL = "http://127.0.0.1:8000/mcp"
 
 import asyncio
 import threading
