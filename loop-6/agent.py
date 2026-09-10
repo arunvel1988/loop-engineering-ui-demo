@@ -1,7 +1,9 @@
 import json
+import asyncio
 
 from groq import Groq
-
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
 from memory import save_memory, search_memory
 from rag import search_knowledge
 
@@ -42,29 +44,298 @@ MAX_RAG_CHUNK_CHARS = 1800
 # MCP CONFIGURATION
 # ============================================================
 
+# The FastMCP server is running on Uvicorn port 8000.
 MCP_SERVER_URL = "http://127.0.0.1:8000/mcp"
 
-import asyncio
-import threading
-import traceback
 
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+def _mcp_tool_to_openai(tool):
+    """
+    Convert an MCP tool definition into the OpenAI/Groq function
+    tool format expected by GPT-OSS.
+    """
+    input_schema = getattr(tool, "inputSchema", None)
+
+    if input_schema is None:
+        input_schema = {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+
+    # MCP uses inputSchema; OpenAI/Groq function tools use parameters.
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description or "",
+            "parameters": input_schema
+        }
+    }
 
 
-_MCP_SESSION = None
-_MCP_STREAM_CONTEXT = None
-_MCP_CLIENT_CONTEXT = None
-_MCP_LOCK = threading.Lock()
-_MCP_TOOLS = []
+def _mcp_result_to_dict(result):
+    """
+    Convert an MCP CallToolResult into JSON-safe data for GPT-OSS.
+    """
+    output = {
+        "success": not bool(getattr(result, "isError", False)),
+    }
+
+    structured = getattr(result, "structuredContent", None)
+    if structured:
+        output["data"] = structured
+
+    content_items = getattr(result, "content", None) or []
+    texts = []
+
+    for item in content_items:
+        text_value = getattr(item, "text", None)
+        if text_value is not None:
+            texts.append(text_value)
+        else:
+            # Keep non-text MCP content visible without assuming a
+            # particular SDK content class.
+            try:
+                texts.append(str(item))
+            except Exception:
+                pass
+
+    if texts:
+        output["output"] = "\n".join(texts)
+
+    if getattr(result, "isError", False):
+        output["error"] = output.get("output", "MCP tool returned an error.")
+
+    return output
+
+
+async def _discover_mcp_tools_async():
+    """
+    Discover MCP tools.
+
+    IMPORTANT:
+    The entire Streamable HTTP client lifecycle is contained in
+    this coroutine. Nothing from the MCP context is returned or
+    reused after this coroutine exits.
+    """
+    async with streamablehttp_client(MCP_SERVER_URL) as (
+        read_stream,
+        write_stream,
+        _,
+    ):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            result = await session.list_tools()
+
+            tools = [
+                _mcp_tool_to_openai(tool)
+                for tool in result.tools
+            ]
+
+            print(f"[MCP] Discovered {len(tools)} tools.")
+            return tools
+
+
+async def _call_mcp_tool_async(session, tool_name, arguments):
+    """
+    Call an MCP tool using the SAME ClientSession that was created
+    for the current agent execution.
+
+    This function must only be called while that session's async
+    context is still active.
+    """
+    result = await session.call_tool(
+        tool_name,
+        arguments=arguments or {}
+    )
+    return _mcp_result_to_dict(result)
+
+
+async def _run_agent_mcp_loop(messages, pending_action):
+    """
+    Run the GPT-OSS tool loop and MCP session inside ONE asyncio
+    event loop and ONE Streamable HTTP session.
+
+    This is the critical fix for:
+      - ClosedResourceError
+      - GeneratorExit
+      - cancel scope entered/exited in different task
+    """
+
+    async with streamablehttp_client(MCP_SERVER_URL) as (
+        read_stream,
+        write_stream,
+        _,
+    ):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+
+            tool_result = await session.list_tools()
+
+            tools = [
+                _mcp_tool_to_openai(tool)
+                for tool in tool_result.tools
+            ]
+
+            print(f"[MCP] Discovered {len(tools)} tools.")
+
+            while True:
+                # Groq's Python SDK is synchronous. Calling it here is
+                # safe for this single-request Flask architecture; the
+                # important part is that MCP remains inside this one
+                # async lifecycle.
+                response = client.chat.completions.create(
+                    model=MODEL,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    temperature=0.2,
+                    max_completion_tokens=2048,
+                    reasoning_effort="medium"
+                )
+
+                message = response.choices[0].message
+
+                # ----------------------------------------------------
+                # NO TOOL CALL
+                # ----------------------------------------------------
+                if not message.tool_calls:
+                    return (
+                        message.content or "",
+                        pending_action
+                    )
+
+                # Add the assistant message containing the tool calls.
+                messages.append(message)
+
+                # ----------------------------------------------------
+                # PROCESS TOOL CALLS
+                # ----------------------------------------------------
+                for tool_call in message.tool_calls:
+
+                    tool_name = tool_call.function.name
+
+                    try:
+                        arguments = json.loads(
+                            tool_call.function.arguments or "{}"
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        arguments = {}
+
+                    # =================================================
+                    # DESTRUCTIVE REMEDIATION
+                    # =================================================
+                    #
+                    # terminate_process is exposed by MCP, but the
+                    # agent intercepts it BEFORE sending it to MCP.
+                    # The actual destructive operation only happens
+                    # after explicit human approval in app.py.
+                    #
+                    if tool_name == "terminate_process":
+
+                        pid = arguments.get("pid")
+
+                        if pid is None:
+                            result = {
+                                "success": False,
+                                "requires_approval": False,
+                                "error": "No PID was provided."
+                            }
+
+                        else:
+                            try:
+                                pid = int(pid)
+                            except (ValueError, TypeError):
+                                result = {
+                                    "success": False,
+                                    "requires_approval": False,
+                                    "error": "Invalid PID."
+                                }
+                            else:
+                                if pid == 1:
+                                    result = {
+                                        "success": False,
+                                        "requires_approval": False,
+                                        "error": (
+                                            "PID 1 cannot be terminated."
+                                        )
+                                    }
+                                else:
+                                    pending_action = {
+                                        "tool": "terminate_process",
+                                        "arguments": {
+                                            "pid": pid
+                                        },
+                                        "description": (
+                                            f"Terminate process PID {pid}"
+                                        )
+                                    }
+
+                                    result = {
+                                        "success": False,
+                                        "requires_approval": True,
+                                        "pid": pid,
+                                        "message": (
+                                            f"Termination of PID {pid} "
+                                            "requires human approval."
+                                        )
+                                    }
+
+                    # =================================================
+                    # MCP READ/SAFE TOOLS
+                    # =================================================
+                    else:
+                        try:
+                            result = await _call_mcp_tool_async(
+                                session,
+                                tool_name,
+                                arguments
+                            )
+
+                        except Exception as e:
+                            print(
+                                f"[MCP] Tool call failed: "
+                                f"{tool_name}: {e}"
+                            )
+
+                            result = {
+                                "success": False,
+                                "error": (
+                                    f"MCP tool '{tool_name}' failed: "
+                                    f"{str(e)}"
+                                )
+                            }
+
+                    # Send MCP/tool result back to GPT-OSS.
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call.id,
+                            "content": json.dumps(
+                                result,
+                                default=str
+                            )
+                        }
+                    )
 
 
 def _run_async(coro):
-    """Run an async MCP coroutine from synchronous Flask code."""
+    """
+    Run one complete async operation.
+
+    Flask is synchronous in this application, so each call gets its
+    own event loop. MCP resources NEVER escape that event loop.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
+
+    # This branch is only relevant if run_agent is unexpectedly called
+    # from an already-running event loop. Run the coroutine in a
+    # dedicated thread so asyncio.run() still owns the complete
+    # lifecycle.
+    import threading
 
     result = {}
     error = {}
@@ -72,7 +343,7 @@ def _run_async(coro):
     def runner():
         try:
             result["value"] = asyncio.run(coro)
-        except Exception as exc:
+        except BaseException as exc:
             error["value"] = exc
 
     thread = threading.Thread(target=runner, daemon=True)
@@ -85,297 +356,55 @@ def _run_async(coro):
     return result.get("value")
 
 
-async def _mcp_connect_async():
-    """Create and initialize one MCP Streamable HTTP session."""
-    global _MCP_SESSION
-    global _MCP_STREAM_CONTEXT
-    global _MCP_CLIENT_CONTEXT
-
-    if _MCP_SESSION is not None:
-        return _MCP_SESSION
-
-    _MCP_STREAM_CONTEXT = streamablehttp_client(
-        MCP_SERVER_URL
-    )
-
-    read_stream, write_stream, _ = (
-        await _MCP_STREAM_CONTEXT.__aenter__()
-    )
-
-    _MCP_CLIENT_CONTEXT = ClientSession(
-        read_stream,
-        write_stream,
-    )
-
-    await _MCP_CLIENT_CONTEXT.__aenter__()
-    await _MCP_CLIENT_CONTEXT.initialize()
-
-    _MCP_SESSION = _MCP_CLIENT_CONTEXT
-
-    return _MCP_SESSION
-
-
-async def _mcp_disconnect_async():
-    """Close the MCP connection and reset its state."""
-    global _MCP_SESSION
-    global _MCP_STREAM_CONTEXT
-    global _MCP_CLIENT_CONTEXT
-
+def discover_mcp_tools():
+    """
+    Public synchronous helper used for diagnostics/tests.
+    """
     try:
-        if _MCP_CLIENT_CONTEXT is not None:
-            await _MCP_CLIENT_CONTEXT.__aexit__(
-                None, None, None
-            )
-    finally:
-        try:
-            if _MCP_STREAM_CONTEXT is not None:
-                await _MCP_STREAM_CONTEXT.__aexit__(
-                    None, None, None
-                )
-        finally:
-            _MCP_SESSION = None
-            _MCP_STREAM_CONTEXT = None
-            _MCP_CLIENT_CONTEXT = None
-
-
-async def _discover_mcp_tools_async():
-    """Discover MCP tools and convert them to Groq schemas."""
-    session = await _mcp_connect_async()
-    response = await session.list_tools()
-
-    tools = []
-
-    for tool in response.tools:
-        schema = getattr(tool, "inputSchema", None)
-
-        if schema is None:
-            schema = {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            }
-
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": (
-                    tool.description
-                    or f"MCP tool: {tool.name}"
-                ),
-                "parameters": schema,
-            },
-        })
-
-    return tools
-
-
-def get_mcp_tools():
-    """Discover tools from the external MCP server."""
-    global _MCP_TOOLS
-
-    with _MCP_LOCK:
-        try:
-            _MCP_TOOLS = _run_async(
-                _discover_mcp_tools_async()
-            )
-
-            print(
-                f"[MCP] Discovered {len(_MCP_TOOLS)} tools."
-            )
-
-            return _MCP_TOOLS
-
-        except Exception:
-            print("[MCP] Tool discovery failed:")
-            traceback.print_exc()
-
-            try:
-                _run_async(_mcp_disconnect_async())
-            except Exception:
-                pass
-
-            _MCP_TOOLS = []
-            return []
-
-
-async def _call_mcp_tool_async(tool_name, arguments):
-    """Call a tool through the persistent MCP session."""
-    session = await _mcp_connect_async()
-
-    result = await session.call_tool(
-        tool_name,
-        arguments=arguments,
-    )
-
-    output = []
-
-    for content in result.content:
-        if hasattr(content, "text"):
-            try:
-                output.append(json.loads(content.text))
-            except (json.JSONDecodeError, TypeError):
-                output.append(content.text)
-
-        elif hasattr(content, "model_dump"):
-            output.append(content.model_dump())
-
-        else:
-            output.append(str(content))
-
-    if len(output) == 1:
-        return output[0]
-
-    return output
-
-
-def call_mcp_tool(tool_name, arguments):
-    """Synchronous wrapper used by the agent tool loop."""
-    with _MCP_LOCK:
-        try:
-            return _run_async(
-                _call_mcp_tool_async(
-                    tool_name,
-                    arguments,
-                )
-            )
-
-        except Exception:
-            print(
-                f"[MCP] Tool call failed: {tool_name}"
-            )
-            traceback.print_exc()
-
-            try:
-                _run_async(_mcp_disconnect_async())
-            except Exception:
-                pass
-
-            raise
-
-
-# ============================================================
-# LOCAL HISTORICAL INCIDENT TOOL
-# ============================================================
-
-INCIDENT_DB_PATH = "devops_agent.db"
-
-
-def search_previous_incidents(
-    alertname=None,
-    severity=None,
-    limit=5,
-):
-    """Search historical incidents in the local SQLite database."""
-
-    try:
-        limit = max(1, min(int(limit or 5), 10))
-
-        import sqlite3
-
-        conn = sqlite3.connect(INCIDENT_DB_PATH)
-        conn.row_factory = sqlite3.Row
-
-        query = """
-            SELECT
-                id,
-                alertname,
-                severity,
-                status,
-                summary,
-                description,
-                agent_response,
-                remediation_status,
-                remediation_result,
-                verification,
-                created_at
-            FROM incidents
-            WHERE 1=1
-        """
-
-        params = []
-
-        if alertname:
-            query += " AND alertname = ?"
-            params.append(alertname)
-
-        if severity:
-            query += " AND severity = ?"
-            params.append(severity)
-
-        query += """
-            ORDER BY created_at DESC
-            LIMIT ?
-        """
-
-        params.append(limit)
-
-        rows = conn.execute(
-            query,
-            params,
-        ).fetchall()
-
-        conn.close()
-
-        results = []
-
-        for row in rows:
-            item = dict(row)
-
-            response = item.get("agent_response")
-
-            if response and len(response) > 1000:
-                item["agent_response"] = (
-                    response[:1000] + "..."
-                )
-
-            results.append(item)
-
-        return results
-
+        return _run_async(
+            _discover_mcp_tools_async()
+        )
     except Exception as e:
+        print(f"[MCP] Tool discovery failed: {e}")
+        return []
+
+
+def call_mcp_tool(tool_name, arguments=None):
+    """
+    Public synchronous helper for app.py approval/verification code.
+
+    It creates one complete MCP lifecycle for this single operation.
+    It does NOT retain an async session between Flask requests.
+    """
+    async def call_once():
+        async with streamablehttp_client(MCP_SERVER_URL) as (
+            read_stream,
+            write_stream,
+            _,
+        ):
+            async with ClientSession(
+                read_stream,
+                write_stream
+            ) as session:
+                await session.initialize()
+
+                return await _call_mcp_tool_async(
+                    session,
+                    tool_name,
+                    arguments or {}
+                )
+
+    try:
+        return _run_async(call_once())
+    except Exception as e:
+        print(
+            f"[MCP] Tool call failed: {tool_name}: {e}"
+        )
+
         return {
             "success": False,
-            "error": str(e),
+            "error": str(e)
         }
-
-
-HISTORY_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "search_previous_incidents",
-        "description": (
-            "Search previous DevOps incidents stored in the "
-            "incident database. Use this during investigation "
-            "to find similar past incidents, previous root "
-            "causes and remediation results. Historical "
-            "incidents are supporting evidence only."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "alertname": {
-                    "type": "string",
-                    "description": "Alert name such as HighCPU.",
-                },
-                "severity": {
-                    "type": "string",
-                    "description": (
-                        "Optional severity such as "
-                        "critical or warning."
-                    ),
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": (
-                        "Maximum number of previous incidents."
-                    ),
-                },
-            },
-            "required": [],
-        },
-    },
-}
 
 
 # ============================================================
@@ -664,19 +693,20 @@ For infrastructure incidents:
 7. AVAILABLE TOOLS
 ===========================================================
 
-Infrastructure tools are provided dynamically by the external
-MCP server.
+Current infrastructure:
 
-The MCP server provides tools for Linux/server inspection,
-process inspection, network ports, Docker, systemd services,
-and remediation actions.
+- check_server
+- check_processes
+- check_ports
+- check_docker
 
 Historical operational memory:
 
 - search_previous_incidents
 
-The infrastructure tools are MCP tools. Use the tool
-descriptions supplied by the MCP server.
+Remediation:
+
+- terminate_process
 
 
 ===========================================================
@@ -1275,8 +1305,25 @@ def run_agent(
     - short-term conversation memory
     - long-term ChromaDB memory
     - RAG knowledge from PDF documents
-    - MCP-provided DevOps tools
+    - MCP infrastructure tools
     - human-approved remediation
+
+    MCP lifecycle design:
+
+        run_agent()
+            |
+            +-- asyncio.run()
+                  |
+                  +-- connect MCP
+                  +-- initialize session
+                  +-- discover tools
+                  +-- GPT tool loop
+                  +-- close session
+            |
+            +-- save long-term memory
+
+    No MCP async object is retained across Flask requests or event
+    loops.
     """
 
     messages = [
@@ -1286,21 +1333,17 @@ def run_agent(
         }
     ]
 
-
     # ========================================================
     # LONG-TERM MEMORY
     # ========================================================
 
-    long_term_memories = get_long_term_memory(
-        task
-    )
+    long_term_memories = get_long_term_memory(task)
 
     memory_context = build_memory_context(
         long_term_memories
     )
 
     if memory_context:
-
         messages.append(
             {
                 "role": "system",
@@ -1308,28 +1351,23 @@ def run_agent(
             }
         )
 
-
     # ========================================================
     # RAG KNOWLEDGE
     # ========================================================
 
-    rag_results = get_rag_knowledge(
-        task
-    )
+    rag_results = get_rag_knowledge(task)
 
     rag_context = build_rag_context(
         rag_results
     )
 
     if rag_context:
-
         messages.append(
             {
                 "role": "system",
                 "content": rag_context
             }
         )
-
 
     # ========================================================
     # SHORT-TERM MEMORY
@@ -1343,14 +1381,8 @@ def run_agent(
 
         for item in recent_history:
 
-            role = item.get(
-                "role"
-            )
-
-            content = item.get(
-                "content",
-                ""
-            )
+            role = item.get("role")
+            content = item.get("content", "")
 
             if role not in [
                 "user",
@@ -1363,7 +1395,6 @@ def run_agent(
 
             # Protect Groq TPM.
             if len(content) > 3000:
-
                 content = (
                     content[:3000]
                     + "..."
@@ -1376,7 +1407,6 @@ def run_agent(
                 }
             )
 
-
     # ========================================================
     # CURRENT REQUEST
     # ========================================================
@@ -1388,259 +1418,51 @@ def run_agent(
         }
     )
 
-
     pending_action = None
 
-
     # ========================================================
-    # MCP TOOL DISCOVERY
-    # ========================================================
-
-    mcp_tools = get_mcp_tools()
-
-    if not mcp_tools:
-        return {
-            "response": (
-                "I could not connect to the DevOps MCP server. "
-                "Please make sure mcp_server.py is running at "
-                "http://127.0.0.1:8080/mcp."
-            ),
-            "pending_action": None,
-        }
-
-    available_tools = mcp_tools + [HISTORY_TOOL]
-
-
-    # ========================================================
-    # AGENT TOOL LOOP
+    # COMPLETE MCP + GPT TOOL LOOP
     # ========================================================
 
-    while True:
-
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            tools=available_tools,
-            tool_choice="auto",
-            temperature=0.2,
-            max_completion_tokens=2048,
-            reasoning_effort="medium"
+    try:
+        final_response, pending_action = _run_async(
+            _run_agent_mcp_loop(
+                messages,
+                pending_action
+            )
         )
 
+    except Exception as e:
 
-        message = response.choices[0].message
-
-
-        # ====================================================
-        # NO TOOL CALL
-        # ====================================================
-
-        if not message.tool_calls:
-
-            final_response = (
-                message.content
-                or ""
-            )
-
-
-            # =================================================
-            # SAVE LONG-TERM MEMORY
-            # =================================================
-
-            try:
-
-                store_long_term_memories(
-                    conversation_id=conversation_id,
-                    task=task,
-                    response=final_response
-                )
-
-            except Exception as e:
-
-                print(
-                    f"[MEMORY] Error storing memory: {e}"
-                )
-
-
-            return {
-                "response": final_response,
-                "pending_action": pending_action
-            }
-
-
-        # ====================================================
-        # ADD ASSISTANT TOOL CALL
-        # ====================================================
-
-        messages.append(
-            message
+        print(
+            f"[AGENT] MCP/agent execution failed: {e}"
         )
 
+        final_response = (
+            "I could not complete the infrastructure "
+            "investigation because the MCP server connection "
+            f"failed: {str(e)}"
+        )
 
-        # ====================================================
-        # PROCESS TOOL CALLS
-        # ====================================================
+    # ========================================================
+    # SAVE LONG-TERM MEMORY
+    # ========================================================
 
-        for tool_call in message.tool_calls:
+    try:
+        store_long_term_memories(
+            conversation_id=conversation_id,
+            task=task,
+            response=final_response
+        )
 
-            tool_name = (
-                tool_call
-                .function
-                .name
-            )
+    except Exception as e:
+        print(
+            f"[MEMORY] Error storing memory: {e}"
+        )
 
-
-            # ------------------------------------------------
-            # Parse tool arguments
-            # ------------------------------------------------
-
-            try:
-
-                arguments = json.loads(
-                    tool_call
-                    .function
-                    .arguments
-                )
-
-            except json.JSONDecodeError:
-
-                arguments = {}
+    return {
+        "response": final_response,
+        "pending_action": pending_action
+    }
 
 
-            # =================================================
-            # HUMAN-APPROVAL REMEDIATION
-            # =================================================
-
-            if tool_name == "terminate_process":
-
-                pid = arguments.get("pid")
-
-                if pid is None:
-
-                    result = {
-                        "success": False,
-                        "requires_approval": False,
-                        "error": "No PID was provided.",
-                    }
-
-                else:
-
-                    try:
-                        pid = int(pid)
-
-                    except (ValueError, TypeError):
-
-                        result = {
-                            "success": False,
-                            "requires_approval": False,
-                            "error": "Invalid PID.",
-                        }
-
-                    else:
-
-                        if pid == 1:
-
-                            result = {
-                                "success": False,
-                                "requires_approval": False,
-                                "error": (
-                                    "PID 1 cannot be terminated."
-                                ),
-                            }
-
-                        else:
-
-                            pending_action = {
-                                "tool": "terminate_process",
-                                "arguments": {
-                                    "pid": pid,
-                                },
-                                "description": (
-                                    f"Terminate process PID {pid}"
-                                ),
-                            }
-
-                            result = {
-                                "success": False,
-                                "requires_approval": True,
-                                "pid": pid,
-                                "message": (
-                                    f"Termination of PID {pid} "
-                                    "requires human approval."
-                                ),
-                            }
-
-
-            # =================================================
-            # LOCAL HISTORICAL INCIDENT SEARCH
-            # =================================================
-
-            elif tool_name == "search_previous_incidents":
-
-                try:
-                    result = search_previous_incidents(
-                        **arguments
-                    )
-
-                except Exception as e:
-                    result = {
-                        "success": False,
-                        "error": str(e),
-                    }
-
-
-            # =================================================
-            # MCP INFRASTRUCTURE TOOL
-            # =================================================
-
-            else:
-
-                mcp_tool_names = {
-                    item["function"]["name"]
-                    for item in mcp_tools
-                }
-
-                if tool_name not in mcp_tool_names:
-
-                    result = {
-                        "success": False,
-                        "error": (
-                            f"Unknown MCP tool: "
-                            f"{tool_name}"
-                        ),
-                    }
-
-                else:
-
-                    try:
-
-                        result = call_mcp_tool(
-                            tool_name,
-                            arguments,
-                        )
-
-                    except Exception as e:
-
-                        result = {
-                            "success": False,
-                            "error": (
-                                f"MCP tool '{tool_name}' "
-                                f"failed: {e}"
-                            ),
-                        }
-
-
-            # =================================================
-            # SEND TOOL RESULT BACK TO GPT
-            # =================================================
-
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(
-                        result,
-                        default=str
-                    )
-                }
-            )
