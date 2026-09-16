@@ -32,3 +32,30 @@ curl http://localhost:8080/health
 
 curl http://localhost:8080/.well-known/agent-card.json
 
+#################################################
+
+
+curl -i -X POST http://localhost:8080/ \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "1",
+    "method": "message/send",
+    "params": {
+      "message": {
+        "messageId": "demo-001",
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": "Investigate the current server. Check CPU, memory, disk usage, and top processes. Do not remediate anything."
+          }
+        ]
+      }
+    }
+  }'
+
+######################################################
+
+
+
