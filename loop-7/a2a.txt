@@ -1,1 +1,34 @@
 pip install a2a-sdk uvicorn starlette
+
+
+export A2A_API_KEY="my-super-secret-a2a-key"
+export PUBLIC_BASE_URL="http://localhost:8080"
+
+python a2a_server.py
+
+
+
+OPEN-SOURCE INFRASTRUCTURE A2A AGENT
+
+
+http://0.0.0.0:8080
+
+
+http://localhost:8080/health
+
+
+http://localhost:8080/.well-known/agent-card.json
+
+
+http://localhost:8080/a2a
+
+
+
+curl http://localhost:8080/health
+
+
+
+
+
+curl http://localhost:8080/.well-known/agent-card.json
+
