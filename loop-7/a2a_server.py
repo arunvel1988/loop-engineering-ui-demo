@@ -1,14 +1,12 @@
-
-import os
 import asyncio
+import os
 import uvicorn
 
-from dotenv import load_dotenv
-
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.routing import Route
 
+from a2a.helpers import new_task_from_user_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -16,38 +14,17 @@ from a2a.server.routes import (
     create_agent_card_routes,
     create_jsonrpc_routes,
 )
-from a2a.server.tasks import (
-    InMemoryTaskStore,
-    TaskUpdater,
-)
+from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 
 from a2a.types import (
     AgentCapabilities,
     AgentCard,
     AgentInterface,
     AgentSkill,
-)
-
-from a2a.helpers import (
-    get_message_text,
-    new_task_from_user_message,
-    new_text_message,
-    new_text_part,
+    Part,
 )
 
 from a2a.types.a2a_pb2 import TaskState
-
-
-# ============================================================
-# LOAD ENVIRONMENT VARIABLES
-# ============================================================
-
-load_dotenv()
-
-
-# ============================================================
-# IMPORT YOUR EXISTING AGENT
-# ============================================================
 
 from agent import run_agent
 
@@ -56,108 +33,114 @@ from agent import run_agent
 # CONFIGURATION
 # ============================================================
 
-HOST = os.getenv(
-    "A2A_HOST",
-    "0.0.0.0"
-)
+HOST = "0.0.0.0"
+PORT = int(os.environ.get("A2A_PORT", "8080"))
 
-PORT = int(
-    os.getenv(
-        "A2A_PORT",
-        "8080"
-    )
-)
-
-PUBLIC_BASE_URL = os.getenv(
-    "PUBLIC_BASE_URL",
-    f"http://localhost:{PORT}"
-).rstrip("/")
-
-A2A_API_KEY = os.getenv(
-    "A2A_API_KEY",
-    "my-super-secret-a2a-key"
+# IMPORTANT:
+# For local testing, localhost is fine.
+#
+# Later, when exposing through Killercoda / public URL,
+# change this environment variable:
+#
+# export A2A_PUBLIC_URL="https://YOUR-URL"
+#
+PUBLIC_URL = os.environ.get(
+    "A2A_PUBLIC_URL",
+    f"http://127.0.0.1:{PORT}"
 )
 
 
 # ============================================================
-# API KEY AUTHENTICATION
+# A2A AGENT CARD
 # ============================================================
 
-class APIKeyMiddleware(BaseHTTPMiddleware):
+agent_skill = AgentSkill(
+    id="infrastructure-investigation",
+    name="Infrastructure Investigation",
+    description=(
+        "Investigates Linux infrastructure incidents using live "
+        "CPU, memory, disk, process, port, Docker and historical "
+        "incident telemetry. Provides evidence-based root cause "
+        "analysis and remediation recommendations."
+    ),
+    tags=[
+        "infrastructure",
+        "linux",
+        "ec2",
+        "incident",
+        "root-cause-analysis",
+        "devops",
+        "sre",
+    ],
+    examples=[
+        "Investigate high CPU usage on the server.",
+        "Find the process consuming the most CPU.",
+        "Investigate a server incident and determine the root cause.",
+        "Check whether Docker containers are causing the incident.",
+        "Analyze the current server state and recommend remediation.",
+    ],
+)
 
-    async def dispatch(self, request, call_next):
 
-        path = request.url.path
+agent_card = AgentCard(
+    name="Open Source Infrastructure Agent",
+    description=(
+        "An infrastructure investigation agent built with Python, "
+        "Groq and custom infrastructure tools. It investigates "
+        "Linux server incidents, correlates live telemetry with "
+        "historical incidents and recommends safe remediation."
+    ),
+    version="1.0.0",
 
-        # ----------------------------------------------------
-        # Agent Card
-        #
-        # AWS needs to discover the agent.
-        #
-        # We allow the Agent Card without the API key.
-        # ----------------------------------------------------
+    default_input_modes=[
+        "text",
+        "text/plain",
+    ],
 
-        if path.endswith(
-            "/.well-known/agent-card.json"
-        ):
-            return await call_next(request)
+    default_output_modes=[
+        "text",
+        "text/plain",
+    ],
 
-        # ----------------------------------------------------
-        # Health check
-        # ----------------------------------------------------
+    capabilities=AgentCapabilities(
+        streaming=False,
+    ),
 
-        if path == "/health":
-            return await call_next(request)
-
-        # ----------------------------------------------------
-        # A2A API authentication
-        # ----------------------------------------------------
-
-        api_key = request.headers.get(
-            "x-api-key"
+    supported_interfaces=[
+        AgentInterface(
+            protocol_binding="JSONRPC",
+            url=f"{PUBLIC_URL}/",
+            protocol_version="1.0",
         )
+    ],
 
-        if api_key != A2A_API_KEY:
-
-            return JSONResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "error": {
-                        "code": -32001,
-                        "message": "Unauthorized"
-                    }
-                },
-                status_code=401
-            )
-
-        return await call_next(request)
+    skills=[
+        agent_skill,
+    ],
+)
 
 
 # ============================================================
-# INFRASTRUCTURE AGENT EXECUTOR
+# A2A EXECUTOR
 # ============================================================
 
-class InfrastructureAgentExecutor(
-    AgentExecutor
-):
+class InfrastructureAgentExecutor(AgentExecutor):
     """
-    A2A adapter for the existing infrastructure agent.
+    Thin A2A adapter around the existing infrastructure agent.
 
-    IMPORTANT:
+    We do NOT modify agent.py.
 
-    This class does NOT contain the LLM.
-
-    It simply receives an A2A message and passes
-    the text to the existing:
-
-        run_agent()
-
-    function from agent.py.
+    A2A request
+          |
+          v
+    InfrastructureAgentExecutor
+          |
+          v
+    existing run_agent()
+          |
+          v
+    Groq + infrastructure tools
     """
-
-    # ========================================================
-    # EXECUTE
-    # ========================================================
 
     async def execute(
         self,
@@ -165,215 +148,182 @@ class InfrastructureAgentExecutor(
         event_queue: EventQueue,
     ) -> None:
 
-        # ----------------------------------------------------
-        # Create task if required
-        # ----------------------------------------------------
+        try:
 
-        if context.current_task:
+            # ------------------------------------------------
+            # Extract user message
+            # ------------------------------------------------
 
-            task = context.current_task
+            user_message = context.message
 
-        else:
+            query = ""
+
+            if user_message is not None:
+
+                for part in user_message.parts:
+
+                    # A2A v1 Part may contain text
+                    if hasattr(part, "root"):
+
+                        root = part.root
+
+                        if hasattr(root, "text") and root.text:
+                            query += root.text
+
+                    elif hasattr(part, "text") and part.text:
+                        query += part.text
+
+            query = query.strip()
+
+            if not query:
+                query = "Investigate the current infrastructure."
+
+
+            print("\n" + "=" * 70)
+            print("A2A REQUEST")
+            print("=" * 70)
+            print(query)
+            print("=" * 70)
+
+
+            # ------------------------------------------------
+            # Run existing infrastructure agent
+            # ------------------------------------------------
+
+            result = await asyncio.to_thread(
+                run_agent,
+                query,
+            )
+
+
+            # ------------------------------------------------
+            # Convert result to string
+            # ------------------------------------------------
+
+            if isinstance(result, dict):
+
+                response_text = result.get("response")
+
+                if response_text is None:
+                    response_text = str(result)
+
+            else:
+
+                response_text = str(result)
+
+
+            if not response_text:
+                response_text = "The infrastructure agent returned no response."
+
+
+            print("\n" + "=" * 70)
+            print("A2A RESPONSE")
+            print("=" * 70)
+            print(response_text)
+            print("=" * 70)
+
+
+            # ------------------------------------------------
+            # Create task
+            # ------------------------------------------------
 
             task = new_task_from_user_message(
-                context.message
+                context.message,
+                context.context_id,
             )
+
+            task_id = task.id
+
+            context_id = task.context_id
+
+
+            # ------------------------------------------------
+            # Task updater
+            # ------------------------------------------------
+
+            updater = TaskUpdater(
+                event_queue=event_queue,
+                task_id=task_id,
+                context_id=context_id,
+            )
+
+
+            # ------------------------------------------------
+            # Send initial task
+            # ------------------------------------------------
 
             await event_queue.enqueue_event(
                 task
             )
 
-        # ----------------------------------------------------
-        # Task updater
-        # ----------------------------------------------------
 
-        task_updater = TaskUpdater(
-            event_queue=event_queue,
-            task_id=task.id,
-            context_id=task.context_id,
-        )
+            # ------------------------------------------------
+            # Mark task working
+            # ------------------------------------------------
 
-        # ----------------------------------------------------
-        # Tell caller that investigation started
-        # ----------------------------------------------------
-
-        await task_updater.update_status(
-            state=TaskState.TASK_STATE_WORKING,
-            message=new_text_message(
-                "Infrastructure Agent is investigating the request."
-            ),
-        )
-
-        # ----------------------------------------------------
-        # Extract user message
-        # ----------------------------------------------------
-
-        query = get_message_text(
-            context.message
-        )
-
-        if not query:
-
-            response_text = (
-                "No text was provided in the A2A request."
+            await updater.update_status(
+                state=TaskState.TASK_STATE_WORKING
             )
 
-        else:
 
-            print()
-            print("=" * 70)
-            print("A2A REQUEST RECEIVED")
-            print("=" * 70)
-            print()
-            print(query)
-            print()
-            print("=" * 70)
-            print()
+            # ------------------------------------------------
+            # Send final response
+            # ------------------------------------------------
+
+            await updater.add_artifact(
+                parts=[
+                    Part(
+                        text=response_text
+                    )
+                ],
+                name="infrastructure-investigation-result",
+            )
+
+
+            # ------------------------------------------------
+            # Complete task
+            # ------------------------------------------------
+
+            await updater.update_status(
+                state=TaskState.TASK_STATE_COMPLETED
+            )
+
+
+        except asyncio.CancelledError:
+
+            raise
+
+
+        except Exception as exc:
+
+            print("\nA2A EXECUTION ERROR:")
+            print(str(exc))
 
             try:
 
-                # ====================================================
-                # THIS IS THE IMPORTANT PART
-                # ====================================================
-                #
-                # We call your existing infrastructure agent.
-                #
-                # AWS DevOps Agent
-                #       |
-                #       | A2A
-                #       v
-                # a2a_server.py
-                #       |
-                #       v
-                # run_agent(query)
-                #       |
-                #       v
-                # agent.py
-                #
-                # ====================================================
+                # If task/updater was already created,
+                # report failure to the A2A client.
 
-                result = await asyncio.to_thread(
-                    run_agent,
-                    query
+                await updater.update_status(
+                    state=TaskState.TASK_STATE_FAILED,
+                    message=updater.new_agent_message(
+                        [
+                            Part(
+                                text=f"Infrastructure agent error: {exc}"
+                            )
+                        ]
+                    ),
                 )
 
-                # ----------------------------------------------------
-                # Existing run_agent() returns a dictionary
-                # ----------------------------------------------------
+            except Exception:
 
-                if isinstance(
-                    result,
-                    dict
-                ):
+                # If failure happened before updater creation,
+                # simply propagate the exception.
 
-                    response_text = result.get(
-                        "response",
-                        ""
-                    )
+                pass
 
-                    # ------------------------------------------------
-                    # Check if remediation is waiting for approval
-                    # ------------------------------------------------
+            raise
 
-                    pending_action = result.get(
-                        "pending_action"
-                    )
-
-                    if pending_action:
-
-                        response_text += (
-                            "\n\n"
-                            "REMEDIATION REQUIRES HUMAN APPROVAL\n"
-                            "\n"
-                            f"Tool: "
-                            f"{pending_action.get('tool')}\n"
-                            "\n"
-                            f"Arguments: "
-                            f"{pending_action.get('arguments')}\n"
-                            "\n"
-                            f"Description: "
-                            f"{pending_action.get('description')}\n"
-                        )
-
-                    # ------------------------------------------------
-                    # Include error
-                    # ------------------------------------------------
-
-                    if result.get("error"):
-
-                        response_text += (
-                            "\n\n"
-                            "Agent Error:\n"
-                            f"{result.get('error')}"
-                        )
-
-                else:
-
-                    response_text = str(
-                        result
-                    )
-
-            except Exception as exc:
-
-                print()
-                print(
-                    "ERROR FROM INFRASTRUCTURE AGENT:"
-                )
-                print(
-                    str(exc)
-                )
-                print()
-
-                response_text = (
-                    "Infrastructure agent failed:\n"
-                    f"{str(exc)}"
-                )
-
-        # ----------------------------------------------------
-        # Safety fallback
-        # ----------------------------------------------------
-
-        if not response_text:
-
-            response_text = (
-                "The infrastructure agent "
-                "did not return a response."
-            )
-
-        # ----------------------------------------------------
-        # Add final answer as artifact
-        # ----------------------------------------------------
-
-        await task_updater.add_artifact(
-            parts=[
-                new_text_part(
-                    text=response_text,
-                    media_type="text/plain",
-                )
-            ]
-        )
-
-        # ----------------------------------------------------
-        # Mark task completed
-        # ----------------------------------------------------
-
-        await task_updater.update_status(
-            state=TaskState.TASK_STATE_COMPLETED,
-            message=new_text_message(
-                "Infrastructure investigation completed."
-            ),
-        )
-
-        print()
-        print("=" * 70)
-        print("A2A REQUEST COMPLETED")
-        print("=" * 70)
-        print()
-
-
-    # ========================================================
-    # CANCEL
-    # ========================================================
 
     async def cancel(
         self,
@@ -382,275 +332,140 @@ class InfrastructureAgentExecutor(
     ) -> None:
 
         print(
-            "A2A cancellation requested."
-        )
-
-        await event_queue.enqueue_event(
-            new_text_message(
-                "Infrastructure investigation cancelled."
-            )
+            f"A2A cancellation requested for "
+            f"context={context.context_id}"
         )
 
 
 # ============================================================
-# AGENT SKILL
+# HEALTH CHECK
 # ============================================================
 
-infrastructure_skill = AgentSkill(
-
-    id="infrastructure-investigation",
-
-    name="Infrastructure Investigation",
-
-    description=(
-        "Investigates infrastructure incidents using "
-        "real Linux server telemetry, CPU and memory "
-        "information, process information, network "
-        "ports, Docker state and historical incident "
-        "evidence. Identifies evidence-based root "
-        "causes and recommends safe remediation."
-    ),
-
-    tags=[
-        "devops",
-        "sre",
-        "infrastructure",
-        "incident-response",
-        "rca",
-        "linux",
-        "ec2",
-        "docker",
-        "cpu",
-        "memory",
-        "process",
-    ],
-
-    input_modes=[
-        "text/plain"
-    ],
-
-    output_modes=[
-        "text/plain"
-    ],
-
-    examples=[
-        "Investigate why CPU usage is high.",
-
-        "Investigate the current EC2 server.",
-
-        "Find the process consuming excessive CPU.",
-
-        "Check the current Docker containers.",
-
-        "Perform an infrastructure RCA.",
-
-        "Investigate this infrastructure incident "
-        "without making changes.",
-    ],
-)
-
-
-# ============================================================
-# AGENT CARD
-# ============================================================
-
-agent_card = AgentCard(
-
-    name="OpenSource Infrastructure Agent",
-
-    description=(
-        "An infrastructure incident investigation "
-        "agent capable of inspecting Linux server "
-        "telemetry, processes, network ports, Docker "
-        "containers and historical incident data. "
-        "The agent performs evidence-based investigation "
-        "and can propose remediation actions that require "
-        "human approval."
-    ),
-
-    version="1.0.0",
-
-    default_input_modes=[
-        "text/plain"
-    ],
-
-    default_output_modes=[
-        "text/plain"
-    ],
-
-    capabilities=AgentCapabilities(
-        streaming=False,
-        extended_agent_card=False,
-    ),
-
-    supported_interfaces=[
-
-        AgentInterface(
-
-            protocol_binding="JSONRPC",
-
-            url=f"{PUBLIC_BASE_URL}/a2a",
-
-            protocol_version="1.0",
-        )
-    ],
-
-    skills=[
-        infrastructure_skill
-    ],
-)
-
-
-# ============================================================
-# REQUEST HANDLER
-# ============================================================
-
-request_handler = DefaultRequestHandler(
-
-    agent_executor=InfrastructureAgentExecutor(),
-
-    task_store=InMemoryTaskStore(),
-
-    agent_card=agent_card,
-)
-
-
-# ============================================================
-# A2A ROUTES
-# ============================================================
-
-routes = []
-
-
-# ------------------------------------------------------------
-# Agent Card
-#
-# /.well-known/agent-card.json
-# ------------------------------------------------------------
-
-routes.extend(
-    create_agent_card_routes(
-        agent_card
-    )
-)
-
-
-# ------------------------------------------------------------
-# JSON-RPC A2A endpoint
-#
-# /a2a
-# ------------------------------------------------------------
-
-routes.extend(
-    create_jsonrpc_routes(
-        request_handler,
-        rpc_url="/a2a",
-    )
-)
-
-
-# ============================================================
-# STARLETTE APPLICATION
-# ============================================================
-
-app = Starlette(
-    routes=routes
-)
-
-
-# ============================================================
-# AUTHENTICATION MIDDLEWARE
-# ============================================================
-
-app.add_middleware(
-    APIKeyMiddleware
-)
-
-
-# ============================================================
-# HEALTH ENDPOINT
-# ============================================================
-
-@app.route(
-    "/health",
-    methods=["GET"]
-)
 async def health(request):
-
     return JSONResponse(
         {
-            "status": "healthy",
-            "agent": "OpenSource Infrastructure Agent",
-            "protocol": "A2A",
-            "protocol_version": "1.0",
+            "status": "ok",
+            "service": "open-source-infrastructure-agent",
+            "a2a": True,
         }
     )
+
+
+# ============================================================
+# BUILD STARLETTE APPLICATION
+# ============================================================
+
+def build_app():
+
+    # --------------------------------------------------------
+    # A2A request handler
+    # --------------------------------------------------------
+
+    request_handler = DefaultRequestHandler(
+        agent_executor=InfrastructureAgentExecutor(),
+        task_store=InMemoryTaskStore(),
+        agent_card=agent_card,
+    )
+
+
+    # --------------------------------------------------------
+    # A2A routes
+    # --------------------------------------------------------
+
+    routes = []
+
+    # Agent Card
+    routes.extend(
+        create_agent_card_routes(
+            agent_card
+        )
+    )
+
+    # JSON-RPC A2A endpoint
+    #
+    # AWS DevOps Agent will communicate with this endpoint.
+    #
+    routes.extend(
+        create_jsonrpc_routes(
+            request_handler,
+            rpc_url="/",
+        )
+    )
+
+    # --------------------------------------------------------
+    # Health endpoint
+    # --------------------------------------------------------
+
+    routes.append(
+        Route(
+            "/health",
+            health,
+            methods=["GET"],
+        )
+    )
+
+
+    # --------------------------------------------------------
+    # Starlette application
+    # --------------------------------------------------------
+
+    app = Starlette(
+        routes=routes
+    )
+
+    return app
 
 
 # ============================================================
 # START SERVER
 # ============================================================
 
+app = build_app()
+
+
 if __name__ == "__main__":
 
     print()
     print("=" * 70)
-    print("OPEN-SOURCE INFRASTRUCTURE A2A AGENT")
+    print("OPEN SOURCE INFRASTRUCTURE A2A AGENT")
     print("=" * 70)
-    print()
 
-    print(
-        f"Listening on:"
-    )
-
-    print(
-        f"http://{HOST}:{PORT}"
-    )
+    print(f"Listening:       http://{HOST}:{PORT}")
+    print(f"Public URL:      {PUBLIC_URL}")
 
     print()
-
-    print(
-        "Health:"
-    )
-
-    print(
-        f"{PUBLIC_BASE_URL}/health"
-    )
-
-    print()
-
     print(
         "Agent Card:"
     )
 
     print(
-        f"{PUBLIC_BASE_URL}/.well-known/agent-card.json"
+        f"{PUBLIC_URL}/.well-known/agent-card.json"
     )
 
     print()
-
     print(
-        "A2A endpoint:"
+        "A2A JSON-RPC:"
     )
 
     print(
-        f"{PUBLIC_BASE_URL}/a2a"
-    )
-
-    print()
-
-    print(
-        "Skill:"
-    )
-
-    print(
-        "Infrastructure Investigation"
+        f"{PUBLIC_URL}/"
     )
 
     print()
+    print(
+        "Health:"
+    )
 
+    print(
+        f"{PUBLIC_URL}/health"
+    )
+
+    print()
+    print("=" * 70)
+    print("Existing agent.py will be used unchanged.")
     print("=" * 70)
     print()
+
 
     uvicorn.run(
         app,
