@@ -226,11 +226,8 @@ class InfrastructureAgentExecutor(AgentExecutor):
             # ------------------------------------------------
             # Create task
             # ------------------------------------------------
-
-            task = new_task_from_user_message(
-                context.message,
-                context.context_id,
-            )
+            task = new_task_from_user_message(context.message)
+            
 
             task_id = task.id
 
