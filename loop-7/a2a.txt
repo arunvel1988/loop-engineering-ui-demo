@@ -1,4 +1,4 @@
-pip install a2a-sdk uvicorn starlette sse-starlette
+pip install a2a-sdk uvicorn starlette sse-starlette groq
 
 
 export A2A_API_KEY="my-super-secret-a2a-key"
