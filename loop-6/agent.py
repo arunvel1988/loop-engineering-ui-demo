@@ -1,417 +1,433 @@
-import json
 import asyncio
+import json
+import uuid
 
 from groq import Groq
-from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
-from memory import save_memory, search_memory
-from rag import search_knowledge
+
+from tools import TOOL_FUNCTIONS
+
+# A2A client
+from a2a.client import create_client, ClientCallContext
+from a2a.types import Message, Part, Role, SendMessageRequest
 
 
-# ============================================================
-# GROQ CONFIGURATION
-# ============================================================
+# =========================================================
+# GROQ CLIENT
+# =========================================================
 
 client = Groq()
 
 MODEL = "openai/gpt-oss-120b"
 
 
-# ============================================================
-# MEMORY CONFIGURATION
-# ============================================================
+# =========================================================
+# A2A SECURITY AGENT
+# =========================================================
 
-# Keep short-term conversation context small.
-#
-# Important because the current Groq tier has an 8000 TPM
-# limitation for GPT-OSS 120B.
-MAX_SHORT_TERM_MESSAGES = 8
-
-# Maximum long-term memories retrieved from ChromaDB.
-MAX_LONG_TERM_MEMORIES = 3
-
-# Maximum durable memories created from one interaction.
-MAX_NEW_MEMORIES = 3
-
-# Maximum RAG knowledge chunks retrieved for one request.
-MAX_RAG_RESULTS = 2
-
-# Keep retrieved knowledge compact to protect Groq TPM.
-MAX_RAG_CHUNK_CHARS = 1800
+SECURITY_AGENT_URL = "http://localhost:9000"
 
 
-# ============================================================
-# MCP CONFIGURATION
-# ============================================================
-
-# The FastMCP server is running on Uvicorn port 8000.
-MCP_SERVER_URL = "http://127.0.0.1:8000/mcp"
-
-
-def _mcp_tool_to_openai(tool):
+async def _ask_security_agent_async(request: str) -> str:
     """
-    Convert an MCP tool definition into the OpenAI/Groq function
-    tool format expected by GPT-OSS.
-    """
-    input_schema = getattr(tool, "inputSchema", None)
+    Send one security investigation to the Security Agent over A2A.
 
-    if input_schema is None:
-        input_schema = {
-            "type": "object",
-            "properties": {},
-            "required": []
+    The Security Agent is already known to be working independently.
+    We use the same create_client()/send_message() flow as the working
+    test.py, with a longer per-call timeout for the Flask/DevOps path.
+    """
+
+    print("\n[A2A] Connecting to Security Agent...")
+    print(f"[A2A] URL: {SECURITY_AGENT_URL}")
+
+    a2a_client = await create_client(SECURITY_AGENT_URL)
+
+    print("[A2A] Security Agent connected.")
+
+    try:
+        message = Message(
+            role=Role.ROLE_USER,
+            message_id=str(uuid.uuid4()),
+            parts=[Part(text=request)],
+        )
+
+        a2a_request = SendMessageRequest(message=message)
+
+        # Give the Security Agent enough time to run Linux security
+        # commands and have Groq produce the final report.
+        call_context = ClientCallContext(timeout=120.0)
+
+        results = []
+
+        print("[A2A] Sending security investigation...")
+        print(f"[A2A] Request: {request}")
+
+        async for chunk in a2a_client.send_message(
+            a2a_request,
+            context=call_context,
+        ):
+            if chunk.HasField("task"):
+                print(f"[A2A] Task: {chunk.task.id}")
+
+            elif chunk.HasField("status_update"):
+                status = chunk.status_update.status
+                print(f"[A2A] Task state: {status.state}")
+
+            elif chunk.HasField("artifact_update"):
+                artifact = chunk.artifact_update.artifact
+
+                for part in artifact.parts:
+                    if part.HasField("text"):
+                        results.append(part.text)
+
+            elif chunk.HasField("message"):
+                for part in chunk.message.parts:
+                    if part.HasField("text"):
+                        results.append(part.text)
+
+        if not results:
+            return "Security Agent completed the request but returned no textual result."
+
+        # Remove duplicate text if the server/client emitted the same
+        # artifact/message more than once.
+        unique_results = []
+        for item in results:
+            if item and item not in unique_results:
+                unique_results.append(item)
+
+        return "\n\n".join(unique_results)
+
+    finally:
+        # A2A Client exposes close() to release the HTTP connection.
+        try:
+            await a2a_client.close()
+        except Exception:
+            pass
+
+
+def ask_security_agent(request: str) -> str:
+    """
+    Synchronous wrapper used by the existing DevOps Groq tool loop.
+    """
+
+    print("\n" + "=" * 60)
+    print("A2A -> SECURITY AGENT")
+    print("=" * 60)
+    print(f"Security request: {request}")
+
+    try:
+        result = asyncio.run(
+            _ask_security_agent_async(request)
+        )
+
+        print("\n" + "=" * 60)
+        print("A2A <- SECURITY AGENT")
+        print("=" * 60)
+        print(result)
+
+        return result
+
+    except Exception as exc:
+        print("\n" + "=" * 60)
+        print("A2A ERROR")
+        print("=" * 60)
+        print(f"Type: {type(exc).__name__}")
+        print(f"Error: {exc}")
+
+        # Return the error as tool output so the DevOps LLM knows that
+        # delegated security evidence was unavailable instead of
+        # inventing a security finding.
+        return (
+            "Security Agent A2A request failed. "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+
+# =========================================================
+# TOOL DEFINITIONS
+# =========================================================
+
+TOOLS = [
+
+    # -----------------------------------------------------
+    # SERVER HEALTH
+    # -----------------------------------------------------
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_server",
+
+            "description":
+                "Check CPU, memory and disk usage "
+                "of the server.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
         }
 
-    # MCP uses inputSchema; OpenAI/Groq function tools use parameters.
-    return {
+    },
+
+
+    # -----------------------------------------------------
+    # PROCESSES
+    # -----------------------------------------------------
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_processes",
+
+            "description":
+                "List the top processes sorted by "
+                "CPU usage. Use this to identify "
+                "runaway or CPU-intensive processes.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
+        }
+
+    },
+
+
+    # -----------------------------------------------------
+    # NETWORK PORTS
+    # -----------------------------------------------------
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_ports",
+
+            "description":
+                "Check listening network ports on "
+                "the server.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
+        }
+
+    },
+
+
+    # -----------------------------------------------------
+    # DOCKER
+    # -----------------------------------------------------
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "check_docker",
+
+            "description":
+                "Check Docker containers and their "
+                "current state.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
+        }
+
+    },
+
+
+    # -----------------------------------------------------
+    # SECURITY AGENT - A2A
+    # -----------------------------------------------------
+
+    {
         "type": "function",
         "function": {
-            "name": tool.name,
-            "description": tool.description or "",
-            "parameters": input_schema
+            "name": "ask_security_agent",
+            "description":
+                "Delegate a security investigation to the "
+                "dedicated Security Agent through the A2A protocol. "
+                "Use this when an incident requires security analysis "
+                "such as suspicious login activity, exposed ports, "
+                "suspicious processes, SUID files, world-writable files, "
+                "or other security concerns.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "request": {
+                        "type": "string",
+                        "description":
+                            "Describe the security investigation that "
+                            "the Security Agent should perform."
+                    }
+                },
+                "required": ["request"]
+            }
         }
-    }
+    },
 
 
-def _mcp_result_to_dict(result):
-    """
-    Convert an MCP CallToolResult into JSON-safe data for GPT-OSS.
-    """
-    output = {
-        "success": not bool(getattr(result, "isError", False)),
-    }
+    # -----------------------------------------------------
+    # INCIDENT MEMORY
+    # -----------------------------------------------------
 
-    structured = getattr(result, "structuredContent", None)
-    if structured:
-        output["data"] = structured
+    {
+        "type": "function",
 
-    content_items = getattr(result, "content", None) or []
-    texts = []
+        "function": {
 
-    for item in content_items:
-        text_value = getattr(item, "text", None)
-        if text_value is not None:
-            texts.append(text_value)
-        else:
-            # Keep non-text MCP content visible without assuming a
-            # particular SDK content class.
-            try:
-                texts.append(str(item))
-            except Exception:
-                pass
+            "name":
+                "search_previous_incidents",
 
-    if texts:
-        output["output"] = "\n".join(texts)
+            "description":
+                "Search previous DevOps incidents stored "
+                "in the incident database. Use this during "
+                "incident investigation to look for similar "
+                "past incidents, previous root causes and "
+                "previous remediation results. Historical "
+                "incidents are supporting evidence only and "
+                "must never be treated as proof of the "
+                "current root cause.",
 
-    if getattr(result, "isError", False):
-        output["error"] = output.get("output", "MCP tool returned an error.")
+            "parameters": {
 
-    return output
+                "type": "object",
 
+                "properties": {
 
-async def _discover_mcp_tools_async():
-    """
-    Discover MCP tools.
+                    "alertname": {
 
-    IMPORTANT:
-    The entire Streamable HTTP client lifecycle is contained in
-    this coroutine. Nothing from the MCP context is returned or
-    reused after this coroutine exits.
-    """
-    async with streamablehttp_client(MCP_SERVER_URL) as (
-        read_stream,
-        write_stream,
-        _,
-    ):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            result = await session.list_tools()
+                        "type": "string",
 
-            tools = [
-                _mcp_tool_to_openai(tool)
-                for tool in result.tools
-            ]
+                        "description":
+                            "Alert name to search for, "
+                            "such as HighCPU."
 
-            print(f"[MCP] Discovered {len(tools)} tools.")
-            return tools
+                    },
 
+                    "severity": {
 
-async def _call_mcp_tool_async(session, tool_name, arguments):
-    """
-    Call an MCP tool using the SAME ClientSession that was created
-    for the current agent execution.
+                        "type": "string",
 
-    This function must only be called while that session's async
-    context is still active.
-    """
-    result = await session.call_tool(
-        tool_name,
-        arguments=arguments or {}
-    )
-    return _mcp_result_to_dict(result)
+                        "description":
+                            "Optional severity such as "
+                            "critical or warning."
 
+                    },
 
-async def _run_agent_mcp_loop(messages, pending_action):
-    """
-    Run the GPT-OSS tool loop and MCP session inside ONE asyncio
-    event loop and ONE Streamable HTTP session.
+                    "limit": {
 
-    This is the critical fix for:
-      - ClosedResourceError
-      - GeneratorExit
-      - cancel scope entered/exited in different task
-    """
+                        "type": "integer",
 
-    async with streamablehttp_client(MCP_SERVER_URL) as (
-        read_stream,
-        write_stream,
-        _,
-    ):
-        async with ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
+                        "description":
+                            "Maximum number of previous "
+                            "incidents to return. Keep "
+                            "this small, normally 3 to 5."
 
-            tool_result = await session.list_tools()
+                    }
 
-            tools = [
-                _mcp_tool_to_openai(tool)
-                for tool in tool_result.tools
-            ]
+                },
 
-            print(f"[MCP] Discovered {len(tools)} tools.")
+                "required": []
 
-            while True:
-                # Groq's Python SDK is synchronous. Calling it here is
-                # safe for this single-request Flask architecture; the
-                # important part is that MCP remains inside this one
-                # async lifecycle.
-                response = client.chat.completions.create(
-                    model=MODEL,
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    temperature=0.2,
-                    max_completion_tokens=2048,
-                    reasoning_effort="medium"
-                )
+            }
 
-                message = response.choices[0].message
-
-                # ----------------------------------------------------
-                # NO TOOL CALL
-                # ----------------------------------------------------
-                if not message.tool_calls:
-                    return (
-                        message.content or "",
-                        pending_action
-                    )
-
-                # Add the assistant message containing the tool calls.
-                messages.append(message)
-
-                # ----------------------------------------------------
-                # PROCESS TOOL CALLS
-                # ----------------------------------------------------
-                for tool_call in message.tool_calls:
-
-                    tool_name = tool_call.function.name
-
-                    try:
-                        arguments = json.loads(
-                            tool_call.function.arguments or "{}"
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        arguments = {}
-
-                    # =================================================
-                    # DESTRUCTIVE REMEDIATION
-                    # =================================================
-                    #
-                    # terminate_process is exposed by MCP, but the
-                    # agent intercepts it BEFORE sending it to MCP.
-                    # The actual destructive operation only happens
-                    # after explicit human approval in app.py.
-                    #
-                    if tool_name == "terminate_process":
-
-                        pid = arguments.get("pid")
-
-                        if pid is None:
-                            result = {
-                                "success": False,
-                                "requires_approval": False,
-                                "error": "No PID was provided."
-                            }
-
-                        else:
-                            try:
-                                pid = int(pid)
-                            except (ValueError, TypeError):
-                                result = {
-                                    "success": False,
-                                    "requires_approval": False,
-                                    "error": "Invalid PID."
-                                }
-                            else:
-                                if pid == 1:
-                                    result = {
-                                        "success": False,
-                                        "requires_approval": False,
-                                        "error": (
-                                            "PID 1 cannot be terminated."
-                                        )
-                                    }
-                                else:
-                                    pending_action = {
-                                        "tool": "terminate_process",
-                                        "arguments": {
-                                            "pid": pid
-                                        },
-                                        "description": (
-                                            f"Terminate process PID {pid}"
-                                        )
-                                    }
-
-                                    result = {
-                                        "success": False,
-                                        "requires_approval": True,
-                                        "pid": pid,
-                                        "message": (
-                                            f"Termination of PID {pid} "
-                                            "requires human approval."
-                                        )
-                                    }
-
-                    # =================================================
-                    # MCP READ/SAFE TOOLS
-                    # =================================================
-                    else:
-                        try:
-                            result = await _call_mcp_tool_async(
-                                session,
-                                tool_name,
-                                arguments
-                            )
-
-                        except Exception as e:
-                            print(
-                                f"[MCP] Tool call failed: "
-                                f"{tool_name}: {e}"
-                            )
-
-                            result = {
-                                "success": False,
-                                "error": (
-                                    f"MCP tool '{tool_name}' failed: "
-                                    f"{str(e)}"
-                                )
-                            }
-
-                    # Send MCP/tool result back to GPT-OSS.
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "content": json.dumps(
-                                result,
-                                default=str
-                            )
-                        }
-                    )
-
-
-def _run_async(coro):
-    """
-    Run one complete async operation.
-
-    Flask is synchronous in this application, so each call gets its
-    own event loop. MCP resources NEVER escape that event loop.
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-
-    # This branch is only relevant if run_agent is unexpectedly called
-    # from an already-running event loop. Run the coroutine in a
-    # dedicated thread so asyncio.run() still owns the complete
-    # lifecycle.
-    import threading
-
-    result = {}
-    error = {}
-
-    def runner():
-        try:
-            result["value"] = asyncio.run(coro)
-        except BaseException as exc:
-            error["value"] = exc
-
-    thread = threading.Thread(target=runner, daemon=True)
-    thread.start()
-    thread.join()
-
-    if "value" in error:
-        raise error["value"]
-
-    return result.get("value")
-
-
-def discover_mcp_tools():
-    """
-    Public synchronous helper used for diagnostics/tests.
-    """
-    try:
-        return _run_async(
-            _discover_mcp_tools_async()
-        )
-    except Exception as e:
-        print(f"[MCP] Tool discovery failed: {e}")
-        return []
-
-
-def call_mcp_tool(tool_name, arguments=None):
-    """
-    Public synchronous helper for app.py approval/verification code.
-
-    It creates one complete MCP lifecycle for this single operation.
-    It does NOT retain an async session between Flask requests.
-    """
-    async def call_once():
-        async with streamablehttp_client(MCP_SERVER_URL) as (
-            read_stream,
-            write_stream,
-            _,
-        ):
-            async with ClientSession(
-                read_stream,
-                write_stream
-            ) as session:
-                await session.initialize()
-
-                return await _call_mcp_tool_async(
-                    session,
-                    tool_name,
-                    arguments or {}
-                )
-
-    try:
-        return _run_async(call_once())
-    except Exception as e:
-        print(
-            f"[MCP] Tool call failed: {tool_name}: {e}"
-        )
-
-        return {
-            "success": False,
-            "error": str(e)
         }
 
+    },
 
-# ============================================================
+
+    # -----------------------------------------------------
+    # PROCESS TERMINATION
+    # -----------------------------------------------------
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name":
+                "terminate_process",
+
+            "description":
+                "Request termination of a specific "
+                "process by PID when investigation "
+                "shows that the process is causing "
+                "the incident. This is a remediation "
+                "proposal. The application intercepts "
+                "this request and requires human approval "
+                "before actually terminating the process.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {
+
+                    "pid": {
+
+                        "type": "integer",
+
+                        "description":
+                            "PID of the process that "
+                            "should be terminated."
+
+                    }
+
+                },
+
+                "required": [
+                    "pid"
+                ]
+
+            }
+
+        }
+
+    }
+
+]
+
+
+# =========================================================
 # SYSTEM PROMPT
-# ============================================================
+# =========================================================
 
 SYSTEM_PROMPT = """
+
 You are a professional DevOps incident investigation agent.
 
 Your job is to investigate infrastructure problems using
@@ -419,212 +435,140 @@ REAL information collected from tools.
 
 You must behave like a production SRE.
 
-
 ===========================================================
-1. CONVERSATION MEMORY
-===========================================================
-
-You may receive previous messages from the current conversation.
-
-Use them when relevant.
-
-For example:
-
-User:
-Check CPU.
-
-Agent:
-CPU is 40%.
-
-User:
-Check it again.
-
-You should understand that "it" refers to CPU.
-
-You may compare previous observations with current observations.
-
-IMPORTANT:
-
-Conversation memory represents previous conversation context.
-
-It is NOT current infrastructure telemetry.
-
-When the user asks about CURRENT infrastructure state,
-always use the appropriate infrastructure tool.
-
-
-===========================================================
-2. LONG-TERM CONVERSATIONAL MEMORY
+INVESTIGATION WORKFLOW
 ===========================================================
 
-You may receive relevant long-term memories retrieved
-from ChromaDB.
+Follow this workflow:
 
-These memories represent durable information learned
-from previous conversations.
+1. CHECK INCIDENT HISTORY
+2. OBSERVE CURRENT INFRASTRUCTURE
+3. INVESTIGATE
+4. CORRELATE PAST AND CURRENT EVIDENCE
+5. IDENTIFY ROOT CAUSE
+6. RECOMMEND REMEDIATION
+7. VERIFY
+
+===========================================================
+AVAILABLE TOOLS
+===========================================================
+
+Current infrastructure:
+
+- check_server
+- check_processes
+- check_ports
+- check_docker
+
+Security specialist:
+
+- ask_security_agent
+
+Historical incident memory:
+
+- search_previous_incidents
+
+Remediation:
+
+- terminate_process
+
+===========================================================
+SECURITY AGENT
+===========================================================
+
+A dedicated Security Agent is available through the A2A protocol.
+
+Use ask_security_agent when the incident requires security-specific
+investigation.
 
 Examples:
 
-- application names
-- project information
-- architecture information
-- infrastructure conventions
-- persistent configuration
-- stable user preferences
-- recurring operational preferences
+- suspicious SSH login attempts
+- suspicious authentication activity
+- unexpected listening ports
+- suspicious processes
+- possible security compromise
+- SUID files
+- world-writable files
+- suspicious services
+- security-focused investigation
 
-Use long-term memories when they are relevant.
+The Security Agent performs READ-ONLY investigation.
+
+It can inspect:
+
+- open ports
+- processes
+- logged-in users
+- failed logins
+- SUID files
+- world-writable files
+- security services
+- system information
+
+The Security Agent does NOT perform destructive remediation.
+
+Use the Security Agent's report as specialist evidence.
+
+Do not invent security findings.
+
+Example:
+
+ask_security_agent(
+    request="Investigate whether there are suspicious "
+            "authentication attempts or exposed services "
+            "on this server."
+)
+
+The Security Agent's response should be treated as delegated
+specialist evidence.
+
+===========================================================
+INCIDENT HISTORY
+===========================================================
+
+When investigating an automatically generated incident,
+use search_previous_incidents when relevant.
+
+For example, if the current alert is:
+
+HighCPU
+
+search:
+
+search_previous_incidents(
+    alertname="HighCPU",
+    limit=5
+)
+
+Historical incidents can reveal:
+
+- recurring problems
+- previous root causes
+- previous processes involved
+- previous remediation actions
+- patterns across incidents
 
 IMPORTANT:
 
-Long-term conversational memory is NOT live infrastructure
-telemetry.
+Historical evidence is NOT proof of the current root cause.
 
-For example, if memory says:
-
-"The user's application is called ecommerce-app."
-
-that should be used when the user asks:
-
-"What is my application called?"
-
-However, if the user asks:
-
-"What containers are currently running?"
-
-you MUST use the Docker tool.
-
-Do not confuse an application name with:
-
-- Docker Compose project name
-- container name
-- service name
-- hostname
-- infrastructure resource name
-
-These can be different things.
-
+You MUST inspect current infrastructure telemetry.
 
 ===========================================================
-3. MEMORY QUESTIONS VS CURRENT STATE QUESTIONS
+CURRENT TELEMETRY
 ===========================================================
 
-This distinction is VERY IMPORTANT.
+Use the current infrastructure tools to collect real data.
 
-If the user asks about something previously told to the
-agent, use long-term memory.
+For infrastructure incidents, use tools such as:
 
-Examples:
+check_server
+check_processes
+check_ports
+check_docker
 
-"What is my application called?"
-
-"What application do I use?"
-
-"What database did I tell you I use?"
-
-"What architecture did I tell you about?"
-
-"What are my DevOps preferences?"
-
-"What container name did I tell you earlier?"
-
-For these questions, do NOT automatically call infrastructure
-tools.
-
-Use the relevant long-term memory.
-
-However, if the user asks about CURRENT infrastructure:
-
-"What containers are running now?"
-
-"What is the CPU right now?"
-
-"What ports are open now?"
-
-"Is Docker running now?"
-
-"What is the current memory usage?"
-
-then call the appropriate live infrastructure tool.
-
-NEVER replace a memory answer with unrelated live telemetry.
-
-For example:
-
-If long-term memory says:
-
-"The user's application is called ecommerce-app."
-
-and Docker reports:
-
-"Compose project = monitoring"
-
-then:
-
-"What is my application called?"
-
-must be answered:
-
-"ecommerce-app"
-
-It must NOT be answered:
-
-"monitoring"
-
-because monitoring is the Docker Compose project name,
-not necessarily the application name.
-
-
-===========================================================
-4. RAG / DEVOPS KNOWLEDGE
-===========================================================
-
-You may receive relevant knowledge retrieved from the DevOps
-knowledge base. The knowledge base contains PDF documentation
-about Docker, Linux and DevOps troubleshooting.
-
-Use this knowledge as GENERAL OPERATIONAL GUIDANCE.
-
-IMPORTANT:
-
-RAG knowledge is documentation. It is NOT live infrastructure
-telemetry.
-
-For example, if the retrieved knowledge says:
-
-"Use ps aux --sort=-%cpu to find CPU-intensive processes."
-
-and the user asks:
-
-"Which process is using the most CPU right now?"
-
-you MUST call check_processes because the actual answer requires
-current server information.
-
-If the user asks:
-
-"How do I investigate high CPU on Linux?"
-
-use the retrieved Linux knowledge to explain the procedure.
-
-When RAG knowledge and current tool output are both available:
-
-- Use RAG for procedures, concepts and troubleshooting guidance.
-- Use live tools for current infrastructure facts.
-- Never invent live values from documentation.
-- Never treat documentation as proof of the current root cause.
-- If live telemetry conflicts with documentation, trust the live
-  telemetry for the current incident.
-
-The retrieved knowledge may also help you decide which
-infrastructure tool should be called next.
-
-
-===========================================================
-5. CURRENT TELEMETRY
-===========================================================
-
-Use current infrastructure tools to collect real data.
+Do not invent infrastructure information.
 
 Never invent:
 
@@ -636,181 +580,205 @@ Never invent:
 - ports
 - Docker containers
 - service states
-- infrastructure status
-
-
-If the user asks:
-
-"What is CPU now?"
-
-call:
-
-check_server
-
-Do not answer using an old conversation value.
-
-If the user asks:
-
-"What processes are using CPU now?"
-
-call:
-
-check_processes
-
-If the user asks:
-
-"What containers are running now?"
-
-call:
-
-check_docker
-
-If the user asks:
-
-"What ports are listening now?"
-
-call:
-
-check_ports
-
 
 ===========================================================
-6. INVESTIGATION WORKFLOW
+CORRELATION
 ===========================================================
 
-For infrastructure incidents:
+Compare historical evidence with current telemetry.
 
-1. CHECK INCIDENT HISTORY WHEN RELEVANT
-2. OBSERVE CURRENT INFRASTRUCTURE
-3. INVESTIGATE
-4. CORRELATE EVIDENCE
-5. IDENTIFY ROOT CAUSE
-6. RECOMMEND REMEDIATION
-7. VERIFY
+Example:
 
+Historical:
 
-===========================================================
-7. AVAILABLE TOOLS
-===========================================================
+Previous HighCPU incidents involved
+the "yes" process.
 
-Current infrastructure:
+Current:
 
-- check_server
-- check_processes
-- check_ports
-- check_docker
+yes PID 20001 is consuming 98% CPU.
 
-Historical operational memory:
+Correlation:
 
-- search_previous_incidents
+The historical pattern matches the current
+CPU telemetry.
 
-Remediation:
+This can strengthen the root-cause conclusion.
 
-- terminate_process
+However:
 
+Historical evidence alone is never enough.
 
 ===========================================================
-8. CPU INCIDENT
+ROOT CAUSE RULES
+===========================================================
+
+Only identify a root cause when evidence supports it.
+
+Do NOT assume that something is the root cause simply
+because it exists.
+
+A process listening on a port is NOT automatically
+a performance problem.
+
+A Python process is NOT automatically a problem.
+
+A Flask process is NOT automatically a problem.
+
+A user-space process is NOT automatically a problem.
+
+A low-CPU process is NOT automatically a problem.
+
+A listening port is NOT evidence of a bottleneck by itself.
+
+===========================================================
+CPU INCIDENT
 ===========================================================
 
 If server CPU is significantly elevated and a process is
 using approximately 100% CPU, investigate whether that
 process correlates with the elevated CPU usage.
 
-Only request termination when CURRENT evidence supports it.
+Example:
 
-Never use historical incidents as proof of the current
-root cause.
+Server CPU = 50%
 
+Process:
 
-===========================================================
-9. HISTORICAL INCIDENT MEMORY
-===========================================================
+yes
 
-Previous incidents are historical operational evidence.
+PID = 15992
 
-Use search_previous_incidents when relevant.
+CPU = approximately 100%
 
-Historical incidents are supporting evidence only.
+This is strong evidence that the process may be responsible
+for the CPU-related incident.
 
-They must NEVER be treated as proof of the current root cause.
-
-If historical evidence conflicts with current telemetry,
-trust current telemetry.
-
+If current evidence supports this conclusion, you may
+request termination of that exact PID.
 
 ===========================================================
-10. ROOT CAUSE
+HEALTHY SERVER
 ===========================================================
 
-Only identify a root cause when evidence supports it.
+If telemetry shows:
+
+CPU = 1%
+Memory = 10%
+Disk = 5%
+
+and there is no high-CPU process:
+
+DO NOT invent a root cause.
+
+Report:
+
+"No clear infrastructure bottleneck was detected."
+
+Additional application-level telemetry may be required.
+
+===========================================================
+NETWORK PORT RULE
+===========================================================
+
+Do NOT identify a process as the root cause merely because
+it is listening on a network port.
+
+Example:
+
+0.0.0.0:5000
+PID 17958
+
+does NOT prove that PID 17958 is causing slowness.
+
+Additional evidence is required.
+
+===========================================================
+DOCKER RULE
+===========================================================
+
+If Docker is relevant, inspect Docker state.
+
+Look for:
+
+- unhealthy containers
+- repeatedly restarting containers
+- failed containers
+- obvious resource problems
+
+Do not claim a Docker problem without evidence.
+
+===========================================================
+REMEDIATION RULE
+===========================================================
+
+terminate_process is a destructive remediation action.
+
+NEVER execute destructive remediation automatically.
+
+When strong current evidence shows that a specific process
+is causing the incident:
+
+Call:
+
+terminate_process(pid)
+
+The application intercepts the tool call.
+
+The application does NOT immediately terminate the process.
+
+Instead it creates a human approval request.
+
+The human must click:
+
+"Approve & Execute"
+
+before the operation happens.
+
+===========================================================
+TERMINATION SAFETY
+===========================================================
+
+Never request termination of:
+
+PID 1
+
+Never invent a PID.
+
+Never terminate a process merely because:
+
+- it owns a port
+- it is Python
+- it is Flask
+- it is a user process
+- it has low CPU
+- it appeared in an old incident
+
+The PID MUST come from CURRENT telemetry.
+
+===========================================================
+IMPORTANT
+===========================================================
+
+If historical incidents suggest one cause but current
+telemetry suggests another cause, trust current telemetry.
+
+If historical incidents exist but the current telemetry
+does not support the historical pattern, do not claim
+the historical cause is responsible.
 
 If evidence is insufficient, say:
 
 "Root cause could not be conclusively identified from the
 available telemetry."
 
+You are an SRE, not a guessing engine.
 
 ===========================================================
-11. REMEDIATION
+RESPONSE FORMAT
 ===========================================================
 
-terminate_process is destructive.
-
-NEVER execute destructive remediation automatically.
-
-When strong CURRENT evidence shows that a specific process
-is causing the incident:
-
-1. Explain the evidence.
-2. Identify the exact PID from CURRENT telemetry.
-3. Call terminate_process with that PID.
-
-The application intercepts the call and requires human approval.
-
-Never terminate PID 1.
-
-Never invent a PID.
-
-
-===========================================================
-12. LONG-TERM MEMORY SAFETY
-===========================================================
-
-Not every conversation message should become memory.
-
-Only remember durable and useful information.
-
-Good memories:
-
-- application names
-- project names
-- architecture
-- persistent configuration
-- infrastructure conventions
-- stable preferences
-- recurring operational preferences
-
-Do NOT remember:
-
-- greetings
-- temporary CPU values
-- temporary memory values
-- temporary disk values
-- temporary process IDs
-- one-time investigation results
-- casual conversation
-- passwords
-- API keys
-- secrets
-- access tokens
-
-
-===========================================================
-13. RESPONSE FORMAT
-===========================================================
-
-For infrastructure investigations use:
+When investigation is complete, structure your response as:
 
 Investigation Summary
 
@@ -826,643 +794,396 @@ Risk Assessment
 
 Action Required
 
-For normal conversation, answer naturally.
+Keep the response concise and evidence-based.
 
-Keep responses concise and evidence-based.
+===========================================================
+REMEDIATION REQUEST
+===========================================================
+
+When strong evidence supports terminating a process:
+
+1. Explain the evidence.
+2. Identify the exact PID from CURRENT telemetry.
+3. Call terminate_process with that PID.
+4. Wait for the application to request human approval.
+
+Do NOT merely write:
+
+"Please approve termination."
+
+You MUST call the terminate_process tool when remediation
+is justified.
+
+The application will turn the tool call into an approval
+button.
+
 """
 
 
-# ============================================================
-# LONG-TERM MEMORY SEARCH
-# ============================================================
-
-def get_long_term_memory(task):
-    """
-    Search ChromaDB for memories relevant to the user's
-    current request.
-    """
-
-    try:
-
-        memories = search_memory(
-            query=task,
-            limit=MAX_LONG_TERM_MEMORIES
-        )
-
-        if not memories:
-            return []
-
-        return memories
-
-    except Exception as e:
-
-        print(
-            f"[MEMORY] Long-term memory search failed: {e}"
-        )
-
-        return []
-
-
-# ============================================================
-# BUILD MEMORY CONTEXT
-# ============================================================
-
-def build_memory_context(memories):
-    """
-    Convert ChromaDB search results into a compact
-    context block for GPT-OSS.
-    """
-
-    if not memories:
-        return ""
-
-    lines = [
-        "===========================================================",
-        "RELEVANT LONG-TERM MEMORY",
-        "===========================================================",
-        "",
-        "These are memories retrieved from previous conversations.",
-        "Use them only when relevant to the user's question.",
-        "",
-    ]
-
-    for index, item in enumerate(
-        memories,
-        start=1
-    ):
-
-        memory = item.get(
-            "memory",
-            ""
-        )
-
-        if not memory:
-            continue
-
-        # Keep memory small to protect Groq TPM.
-        if len(memory) > 1000:
-            memory = (
-                memory[:1000]
-                + "..."
-            )
-
-        lines.append(
-            f"{index}. {memory}"
-        )
-
-    lines.append("")
-
-    return "\n".join(lines)
-
-
-# ============================================================
-# EXTRACT DURABLE MEMORIES
-# ============================================================
-
-def extract_memories(
-    task,
-    response
-):
-    """
-    Ask GPT-OSS to identify durable information worth
-    storing in ChromaDB.
-
-    This is NOT a tool call.
-    """
-
-    if not response:
-        return []
-
-    memory_prompt = f"""
-You are a long-term memory extraction system.
-
-Read the interaction below and identify only information
-that is likely to remain useful in future conversations.
-
-Good examples:
-
-- application names
-- project names
-- architecture
-- infrastructure configuration
-- persistent preferences
-- stable DevOps conventions
-- recurring operational preferences
-
-Do NOT save:
-
-- greetings
-- temporary CPU values
-- temporary memory values
-- temporary disk values
-- temporary process IDs
-- one-time incident results
-- temporary infrastructure state
-- casual conversation
-- passwords
-- API keys
-- secrets
-- access tokens
-
-IMPORTANT:
-
-Do not reinterpret or invent information.
-
-Only extract facts explicitly supported by the interaction.
-
-Return ONLY valid JSON.
-
-Exact format:
-
-{{
-  "memories": [
-    "memory 1",
-    "memory 2"
-  ]
-}}
-
-If nothing is worth remembering:
-
-{{
-  "memories": []
-}}
-
-USER MESSAGE:
-{task}
-
-AGENT RESPONSE:
-{response}
-"""
-
-    try:
-
-        result = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You extract durable long-term "
-                        "memories. Return only JSON."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": memory_prompt
-                }
-            ],
-            temperature=0,
-            max_completion_tokens=300,
-            reasoning_effort="low"
-        )
-
-        content = (
-            result
-            .choices[0]
-            .message
-            .content
-            or ""
-        )
-
-        content = content.strip()
-
-
-        # ----------------------------------------------------
-        # Parse normal JSON
-        # ----------------------------------------------------
-
-        try:
-
-            data = json.loads(
-                content
-            )
-
-        except json.JSONDecodeError:
-
-            # ------------------------------------------------
-            # Handle markdown JSON
-            # ------------------------------------------------
-
-            if content.startswith(
-                "```"
-            ):
-
-                content = content.replace(
-                    "```json",
-                    ""
-                )
-
-                content = content.replace(
-                    "```",
-                    ""
-                )
-
-                content = content.strip()
-
-            try:
-
-                data = json.loads(
-                    content
-                )
-
-            except json.JSONDecodeError:
-
-                print(
-                    "[MEMORY] Could not parse memory JSON."
-                )
-
-                return []
-
-
-        memories = data.get(
-            "memories",
-            []
-        )
-
-        if not isinstance(
-            memories,
-            list
-        ):
-            return []
-
-
-        cleaned = []
-
-        for memory in memories:
-
-            if not isinstance(
-                memory,
-                str
-            ):
-                continue
-
-            memory = memory.strip()
-
-            if not memory:
-                continue
-
-            if len(memory) > 1000:
-
-                memory = memory[:1000]
-
-
-            cleaned.append(
-                memory
-            )
-
-            if len(cleaned) >= MAX_NEW_MEMORIES:
-                break
-
-
-        return cleaned
-
-
-    except Exception as e:
-
-        print(
-            f"[MEMORY] Memory extraction failed: {e}"
-        )
-
-        return []
-
-
-# ============================================================
-# SAVE LONG-TERM MEMORIES
-# ============================================================
-
-def store_long_term_memories(
-    conversation_id,
-    task,
-    response
-):
-    """
-    Extract durable memories from the interaction and
-    store them in ChromaDB.
-    """
-
-    if not response:
-        return
-
-
-    memories = extract_memories(
-        task,
-        response
-    )
-
-
-    if not memories:
-        return
-
-
-    for memory in memories:
-
-        try:
-
-            save_memory(
-                conversation_id=(
-                    conversation_id
-                    or "unknown"
-                ),
-                memory=memory,
-                memory_type="conversation"
-            )
-
-            print(
-                f"[MEMORY] Saved: {memory}"
-            )
-
-        except Exception as e:
-
-            print(
-                f"[MEMORY] Failed to save memory: {e}"
-            )
-
-
-# ============================================================
-# RAG KNOWLEDGE SEARCH
-# ============================================================
-
-def get_rag_knowledge(task):
-    """
-    Search the DevOps knowledge base for documentation relevant
-    to the current request.
-
-    This retrieves knowledge from the PDF documents ingested into
-    ChromaDB by rag_ingest.py.
-
-    RAG provides documentation and troubleshooting guidance.
-    It does NOT provide live infrastructure state.
-    """
-
-    try:
-
-        results = search_knowledge(
-            query=task,
-            limit=MAX_RAG_RESULTS
-        )
-
-        if not results:
-            return []
-
-        return results
-
-    except Exception as e:
-
-        print(
-            f"[RAG] Knowledge search failed: {e}"
-        )
-
-        return []
-
-
-# ============================================================
-# BUILD RAG CONTEXT
-# ============================================================
-
-def build_rag_context(results):
-    """
-    Convert retrieved ChromaDB results into a compact context
-    block for GPT-OSS.
-    """
-
-    if not results:
-        return ""
-
-    lines = [
-        "===========================================================",
-        "RELEVANT DEVOPS KNOWLEDGE (RAG)",
-        "===========================================================",
-        "",
-        "The following information was retrieved from the DevOps",
-        "knowledge base PDFs.",
-        "",
-        "Use it as documentation and troubleshooting guidance.",
-        "Do not treat it as live infrastructure telemetry.",
-        "",
-    ]
-
-    for index, item in enumerate(
-        results,
-        start=1
-    ):
-
-        content = item.get(
-            "content",
-            ""
-        )
-
-        if not content:
-            continue
-
-        if len(content) > MAX_RAG_CHUNK_CHARS:
-            content = (
-                content[:MAX_RAG_CHUNK_CHARS]
-                + "..."
-            )
-
-        source = item.get(
-            "source",
-            "unknown"
-        )
-
-        page = item.get(
-            "page",
-            "unknown"
-        )
-
-        distance = item.get(
-            "distance"
-        )
-
-        if isinstance(distance, (int, float)):
-            distance_text = f"{distance:.4f}"
-        else:
-            distance_text = "unknown"
-
-        lines.append(
-            f"SOURCE {index}: {source}, page {page}, "
-            f"distance {distance_text}"
-        )
-        lines.append("")
-        lines.append(content)
-        lines.append("")
-
-    return "\\n".join(lines)
-
-
-# ============================================================
-# MAIN AGENT
-# ============================================================
+# =========================================================
+# RUN AGENT
+# =========================================================
 
 def run_agent(
     task,
     conversation_history=None,
-    conversation_id=None
+    conversation_id=None,
+    **kwargs
 ):
-    """
-    Run GPT-OSS 120B with:
-
-    - short-term conversation memory
-    - long-term ChromaDB memory
-    - RAG knowledge from PDF documents
-    - MCP infrastructure tools
-    - human-approved remediation
-
-    MCP lifecycle design:
-
-        run_agent()
-            |
-            +-- asyncio.run()
-                  |
-                  +-- connect MCP
-                  +-- initialize session
-                  +-- discover tools
-                  +-- GPT tool loop
-                  +-- close session
-            |
-            +-- save long-term memory
-
-    No MCP async object is retained across Flask requests or event
-    loops.
-    """
 
     messages = [
+
         {
-            "role": "system",
-            "content": SYSTEM_PROMPT
+            "role":
+                "system",
+
+            "content":
+                SYSTEM_PROMPT
         }
     ]
 
-    # ========================================================
-    # LONG-TERM MEMORY
-    # ========================================================
-
-    long_term_memories = get_long_term_memory(task)
-
-    memory_context = build_memory_context(
-        long_term_memories
-    )
-
-    if memory_context:
-        messages.append(
-            {
-                "role": "system",
-                "content": memory_context
-            }
-        )
-
-    # ========================================================
-    # RAG KNOWLEDGE
-    # ========================================================
-
-    rag_results = get_rag_knowledge(task)
-
-    rag_context = build_rag_context(
-        rag_results
-    )
-
-    if rag_context:
-        messages.append(
-            {
-                "role": "system",
-                "content": rag_context
-            }
-        )
-
-    # ========================================================
-    # SHORT-TERM MEMORY
-    # ========================================================
+    # -----------------------------------------------------
+    # EXISTING CONVERSATION HISTORY
+    # -----------------------------------------------------
+    # The Flask UI may pass previous messages to run_agent().
+    # Preserve that history so the A2A addition does not break
+    # the existing UI contract.
 
     if conversation_history:
 
-        recent_history = conversation_history[
-            -MAX_SHORT_TERM_MESSAGES:
-        ]
+        for item in conversation_history:
 
-        for item in recent_history:
+            if isinstance(item, dict):
 
-            role = item.get("role")
-            content = item.get("content", "")
+                role = item.get("role")
+                content = item.get("content")
 
-            if role not in [
-                "user",
-                "assistant"
-            ]:
-                continue
+                if role and content:
 
-            if not content:
-                continue
+                    messages.append({
+                        "role": role,
+                        "content": content
+                    })
 
-            # Protect Groq TPM.
-            if len(content) > 3000:
-                content = (
-                    content[:3000]
-                    + "..."
-                )
+    # -----------------------------------------------------
+    # CURRENT USER REQUEST
+    # -----------------------------------------------------
 
-            messages.append(
-                {
-                    "role": role,
-                    "content": content
-                }
-            )
+    messages.append({
+        "role": "user",
+        "content": task
+    })
 
-    # ========================================================
-    # CURRENT REQUEST
-    # ========================================================
 
-    messages.append(
-        {
-            "role": "user",
-            "content": task
-        }
-    )
+    # -----------------------------------------------------
+    # Pending remediation requested by the agent
+    # -----------------------------------------------------
 
     pending_action = None
 
-    # ========================================================
-    # COMPLETE MCP + GPT TOOL LOOP
-    # ========================================================
 
-    try:
-        final_response, pending_action = _run_async(
-            _run_agent_mcp_loop(
-                messages,
-                pending_action
+    # =====================================================
+    # AGENT LOOP
+    # =====================================================
+
+    while True:
+
+        response = client.chat.completions.create(
+
+            model=MODEL,
+
+            messages=messages,
+
+            tools=TOOLS,
+
+            tool_choice="auto",
+
+            temperature=0.2,
+
+            # Reduced from 4096
+            max_completion_tokens=2048,
+
+            reasoning_effort="medium"
+
+        )
+
+
+        message = (
+            response
+            .choices[0]
+            .message
+        )
+
+
+        # =================================================
+        # FINAL RESPONSE
+        # =================================================
+
+        if not message.tool_calls:
+
+            return {
+
+                "response":
+                    message.content or "",
+
+                "pending_action":
+                    pending_action
+
+            }
+
+
+        # =================================================
+        # ADD ASSISTANT TOOL-CALL MESSAGE
+        # =================================================
+
+        messages.append(
+            message
+        )
+
+
+        # =================================================
+        # PROCESS TOOL CALLS
+        # =================================================
+
+        for tool_call in message.tool_calls:
+
+            tool_name = (
+                tool_call
+                .function
+                .name
             )
-        )
-
-    except Exception as e:
-
-        print(
-            f"[AGENT] MCP/agent execution failed: {e}"
-        )
-
-        final_response = (
-            "I could not complete the infrastructure "
-            "investigation because the MCP server connection "
-            f"failed: {str(e)}"
-        )
-
-    # ========================================================
-    # SAVE LONG-TERM MEMORY
-    # ========================================================
-
-    try:
-        store_long_term_memories(
-            conversation_id=conversation_id,
-            task=task,
-            response=final_response
-        )
-
-    except Exception as e:
-        print(
-            f"[MEMORY] Error storing memory: {e}"
-        )
-
-    return {
-        "response": final_response,
-        "pending_action": pending_action
-    }
 
 
+            # -------------------------------------------------
+            # Parse arguments
+            # -------------------------------------------------
+
+            try:
+
+                arguments = json.loads(
+                    tool_call
+                    .function
+                    .arguments
+                )
+
+            except json.JSONDecodeError:
+
+                arguments = {}
+
+
+            # =================================================
+            # REMEDIATION TOOL
+            # =================================================
+
+            if tool_name == "terminate_process":
+
+                pid = arguments.get(
+                    "pid"
+                )
+
+
+                # -------------------------------------------------
+                # Validate PID
+                # -------------------------------------------------
+
+                if pid is None:
+
+                    result = {
+
+                        "success":
+                            False,
+
+                        "requires_approval":
+                            False,
+
+                        "error":
+                            "No PID was provided."
+
+                    }
+
+
+                else:
+
+                    try:
+
+                        pid = int(pid)
+
+
+                    except (
+                        ValueError,
+                        TypeError
+                    ):
+
+                        result = {
+
+                            "success":
+                                False,
+
+                            "requires_approval":
+                                False,
+
+                            "error":
+                                "Invalid PID."
+
+                        }
+
+                    else:
+
+                        # -----------------------------------------
+                        # Never allow PID 1
+                        # -----------------------------------------
+
+                        if pid == 1:
+
+                            result = {
+
+                                "success":
+                                    False,
+
+                                "requires_approval":
+                                    False,
+
+                                "error":
+                                    "PID 1 cannot be terminated."
+
+                            }
+
+                        else:
+
+                            # -------------------------------------
+                            # CREATE PENDING APPROVAL
+                            # -------------------------------------
+
+                            pending_action = {
+
+                                "tool":
+                                    "terminate_process",
+
+                                "arguments": {
+
+                                    "pid":
+                                        pid
+
+                                },
+
+                                "description":
+                                    f"Terminate process PID {pid}"
+
+                            }
+
+
+                            # -------------------------------------
+                            # DO NOT EXECUTE
+                            # -------------------------------------
+
+                            result = {
+
+                                "success":
+                                    False,
+
+                                "requires_approval":
+                                    True,
+
+                                "pid":
+                                    pid,
+
+                                "message":
+                                    f"Termination of PID {pid} "
+                                    f"requires human approval."
+
+                            }
+
+
+            # =================================================
+            # A2A SECURITY AGENT
+            # =================================================
+
+            elif tool_name == "ask_security_agent":
+
+                request = arguments.get("request")
+
+                if not request:
+
+                    result = {
+                        "success": False,
+                        "error":
+                            "No security investigation request was provided."
+                    }
+
+                else:
+
+                    result = ask_security_agent(request)
+
+
+            # =================================================
+            # OBSERVATION TOOLS
+            # =================================================
+
+            else:
+
+                function = TOOL_FUNCTIONS.get(
+                    tool_name
+                )
+
+
+                # -------------------------------------------------
+                # Unknown tool
+                # -------------------------------------------------
+
+                if not function:
+
+                    result = {
+
+                        "success":
+                            False,
+
+                        "error":
+                            f"Unknown tool: {tool_name}"
+
+                    }
+
+
+                # -------------------------------------------------
+                # Execute observation tool
+                # -------------------------------------------------
+
+                else:
+
+                    try:
+
+                        result = function(
+                            **arguments
+                        )
+
+                    except Exception as e:
+
+                        result = {
+
+                            "success":
+                                False,
+
+                            "error":
+                                str(e)
+
+                        }
+
+
+            # =================================================
+            # SEND TOOL RESULT BACK TO GPT-OSS
+            # =================================================
+
+            messages.append({
+
+                "role":
+                    "tool",
+
+                "tool_call_id":
+                    tool_call.id,
+
+                "content":
+                    json.dumps(
+                        result,
+                        default=str
+                    )
+
+            })
