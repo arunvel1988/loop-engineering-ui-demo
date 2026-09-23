@@ -2,7 +2,7 @@
 
 python3 -m venv .venv
 source .venv/bin/activate
-pip install groq a2a-sdk uvicorn
+pip install -U a2a-sdk groq uvicorn starlette
 
 
 
