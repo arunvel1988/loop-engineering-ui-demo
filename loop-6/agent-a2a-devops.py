@@ -772,7 +772,7 @@ button.
 # RUN AGENT
 # =========================================================
 
-def run_agent(task):
+def run_agent(task, conversation_history=None):
 
     messages = [
 
@@ -782,17 +782,40 @@ def run_agent(task):
 
             "content":
                 SYSTEM_PROMPT
-        },
-
-        {
-            "role":
-                "user",
-
-            "content":
-                task
         }
-
     ]
+
+    # -----------------------------------------------------
+    # EXISTING CONVERSATION HISTORY
+    # -----------------------------------------------------
+    # The Flask UI may pass previous messages to run_agent().
+    # Preserve that history so the A2A addition does not break
+    # the existing UI contract.
+
+    if conversation_history:
+
+        for item in conversation_history:
+
+            if isinstance(item, dict):
+
+                role = item.get("role")
+                content = item.get("content")
+
+                if role and content:
+
+                    messages.append({
+                        "role": role,
+                        "content": content
+                    })
+
+    # -----------------------------------------------------
+    # CURRENT USER REQUEST
+    # -----------------------------------------------------
+
+    messages.append({
+        "role": "user",
+        "content": task
+    })
 
 
     # -----------------------------------------------------
