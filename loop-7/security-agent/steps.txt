@@ -11,5 +11,11 @@ pip install groq a2a-sdk uvicorn
 export GROQ_API_KEY="YOUR_GROQ_KEY"
 export A2A_PUBLIC_URL="http://YOUR_SERVER_IP:9000"
 
+
+
 python agent.py
+###################################################################################
+curl -s \
+  http://localhost:9000/.well-known/agent-card.json | jq
+
 ###################################################################################
