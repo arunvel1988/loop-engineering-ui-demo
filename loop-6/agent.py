@@ -7,7 +7,7 @@ from groq import Groq
 from tools import TOOL_FUNCTIONS
 
 # A2A client
-from a2a.client import create_client, ClientCallContext
+from a2a.client import create_client
 from a2a.types import Message, Part, Role, SendMessageRequest
 
 
@@ -28,96 +28,64 @@ SECURITY_AGENT_URL = "http://localhost:9000"
 
 
 async def _ask_security_agent_async(request: str) -> str:
-    """
-    Send one security investigation to the Security Agent over A2A.
+    """Send a security investigation request to the Security Agent using A2A."""
 
-    The Security Agent is already known to be working independently.
-    We use the same create_client()/send_message() flow as the working
-    test.py, with a longer per-call timeout for the Flask/DevOps path.
-    """
+    client = await create_client(SECURITY_AGENT_URL)
 
-    print("\n[A2A] Connecting to Security Agent...")
-    print(f"[A2A] URL: {SECURITY_AGENT_URL}")
+    message = Message(
+        role=Role.ROLE_USER,
+        message_id=str(uuid.uuid4()),
+        parts=[Part(text=request)],
+    )
 
-    a2a_client = await create_client(SECURITY_AGENT_URL)
+    a2a_request = SendMessageRequest(message=message)
 
-    print("[A2A] Security Agent connected.")
+    results = []
 
-    try:
-        message = Message(
-            role=Role.ROLE_USER,
-            message_id=str(uuid.uuid4()),
-            parts=[Part(text=request)],
-        )
+    async for chunk in client.send_message(a2a_request):
+        if chunk.HasField("message"):
+            for part in chunk.message.parts:
+                if part.HasField("text"):
+                    results.append(part.text)
 
-        a2a_request = SendMessageRequest(message=message)
+        elif chunk.HasField("artifact_update"):
+            artifact = chunk.artifact_update.artifact
+            for part in artifact.parts:
+                if part.HasField("text"):
+                    results.append(part.text)
 
-        # Give the Security Agent enough time to run Linux security
-        # commands and have Groq produce the final report.
-        call_context = ClientCallContext(timeout=120.0)
+        elif chunk.HasField("task"):
+            print(f"[A2A] Security task: {chunk.task.id}")
 
-        results = []
+        elif chunk.HasField("status_update"):
+            status = chunk.status_update.status
+            print(f"[A2A] Security task state: {status.state}")
 
-        print("[A2A] Sending security investigation...")
-        print(f"[A2A] Request: {request}")
-
-        async for chunk in a2a_client.send_message(
-            a2a_request,
-            context=call_context,
-        ):
-            if chunk.HasField("task"):
-                print(f"[A2A] Task: {chunk.task.id}")
-
-            elif chunk.HasField("status_update"):
-                status = chunk.status_update.status
-                print(f"[A2A] Task state: {status.state}")
-
-            elif chunk.HasField("artifact_update"):
-                artifact = chunk.artifact_update.artifact
-
-                for part in artifact.parts:
+            # Some A2A servers place the final response text inside
+            # the status message rather than an artifact/message event.
+            if status.HasField("message"):
+                for part in status.message.parts:
                     if part.HasField("text"):
-                        results.append(part.text)
+                        text = part.text
+                        if text and text not in results:
+                            results.append(text)
 
-            elif chunk.HasField("message"):
-                for part in chunk.message.parts:
-                    if part.HasField("text"):
-                        results.append(part.text)
+    if not results:
+        return "Security Agent returned no textual result."
 
-        if not results:
-            return "Security Agent completed the request but returned no textual result."
-
-        # Remove duplicate text if the server/client emitted the same
-        # artifact/message more than once.
-        unique_results = []
-        for item in results:
-            if item and item not in unique_results:
-                unique_results.append(item)
-
-        return "\n\n".join(unique_results)
-
-    finally:
-        # A2A Client exposes close() to release the HTTP connection.
-        try:
-            await a2a_client.close()
-        except Exception:
-            pass
+    return "\n\n".join(results)
 
 
 def ask_security_agent(request: str) -> str:
-    """
-    Synchronous wrapper used by the existing DevOps Groq tool loop.
-    """
-
-    print("\n" + "=" * 60)
-    print("A2A -> SECURITY AGENT")
-    print("=" * 60)
-    print(f"Security request: {request}")
+    """Synchronous wrapper used by the existing DevOps Groq tool loop."""
 
     try:
-        result = asyncio.run(
-            _ask_security_agent_async(request)
-        )
+        print("\n" + "=" * 60)
+        print("A2A -> SECURITY AGENT")
+        print("=" * 60)
+        print(f"Security request: {request}")
+
+        result = asyncio.run(_ask_security_agent_async(request))
 
         print("\n" + "=" * 60)
         print("A2A <- SECURITY AGENT")
@@ -127,19 +95,8 @@ def ask_security_agent(request: str) -> str:
         return result
 
     except Exception as exc:
-        print("\n" + "=" * 60)
-        print("A2A ERROR")
-        print("=" * 60)
-        print(f"Type: {type(exc).__name__}")
-        print(f"Error: {exc}")
-
-        # Return the error as tool output so the DevOps LLM knows that
-        # delegated security evidence was unavailable instead of
-        # inventing a security finding.
-        return (
-            "Security Agent A2A request failed. "
-            f"{type(exc).__name__}: {exc}"
-        )
+        print(f"[A2A ERROR] Security Agent: {exc}")
+        return f"Security Agent A2A request failed: {exc}"
 
 
 # =========================================================
