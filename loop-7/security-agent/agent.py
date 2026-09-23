@@ -1,32 +1,19 @@
 import json
 import os
 import subprocess
+import uuid
+from typing import Any
 
-import uvicorn
 from groq import Groq
 
-from starlette.applications import Starlette
-
-from a2a.server.agent_execution import (
-    AgentExecutor,
-    RequestContext,
-)
-
+from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
-
-from a2a.server.request_handlers import (
-    DefaultRequestHandler,
-)
-
+from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import (
     create_agent_card_routes,
     create_jsonrpc_routes,
 )
-
-from a2a.server.tasks import (
-    InMemoryTaskStore,
-    TaskUpdater,
-)
+from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 
 from a2a.types import (
     AgentCapabilities,
@@ -39,34 +26,21 @@ from a2a.types import (
 
 from a2a.helpers import new_text_message
 
+from starlette.applications import Starlette
+import uvicorn
 
-# =========================================================
+
+# ============================================================
 # CONFIGURATION
-# =========================================================
+# ============================================================
 
-HOST = os.getenv(
-    "A2A_HOST",
-    "0.0.0.0",
-)
-
-PORT = int(
-    os.getenv(
-        "A2A_PORT",
-        "9000",
-    )
-)
+HOST = os.getenv("A2A_HOST", "0.0.0.0")
+PORT = int(os.getenv("A2A_PORT", "9000"))
 
 PUBLIC_URL = os.getenv(
     "A2A_PUBLIC_URL",
     f"http://localhost:{PORT}",
 )
-
-
-# =========================================================
-# GROQ CLIENT
-# =========================================================
-
-client = Groq()
 
 MODEL = os.getenv(
     "GROQ_MODEL",
@@ -74,874 +48,707 @@ MODEL = os.getenv(
 )
 
 
-# =========================================================
-# COMMAND EXECUTION
-# =========================================================
+# ============================================================
+# GROQ CLIENT
+# ============================================================
 
-def run_command(command):
+client = Groq()
+
+
+# ============================================================
+# HELPER
+# ============================================================
+
+def run_command(
+    command: str,
+    timeout: int = 20,
+) -> str:
     """
-    Execute a read-only Linux security command.
+    Execute a read-only Linux command.
+
+    Security note:
+    This Security Agent intentionally only exposes
+    predefined commands. User input is NOT passed
+    directly into a shell command.
     """
 
     try:
-
         result = subprocess.run(
             command,
             shell=True,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=timeout,
         )
 
-        return {
-            "success": result.returncode == 0,
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip(),
-            "return_code": result.returncode,
-        }
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+
+        if stdout:
+            return stdout
+
+        if stderr:
+            return f"Command error:\n{stderr}"
+
+        return "No output returned."
 
     except subprocess.TimeoutExpired:
+        return "Command timed out."
 
-        return {
-            "success": False,
-            "error": "Command timed out.",
-        }
-
-    except Exception as e:
-
-        return {
-            "success": False,
-            "error": str(e),
-        }
+    except Exception as exc:
+        return f"Command execution failed: {exc}"
 
 
-# =========================================================
+# ============================================================
 # SECURITY TOOLS
-# =========================================================
+# ============================================================
 
-def check_open_ports():
+def check_open_ports() -> str:
+    """
+    Check listening TCP/UDP ports and associated processes.
+    """
 
     return run_command(
         "ss -tulnp"
     )
 
 
-def check_processes():
+def check_processes() -> str:
+    """
+    Show the processes consuming the most CPU.
+    """
 
     return run_command(
         "ps aux --sort=-%cpu | head -20"
     )
 
 
-def check_logged_in_users():
+def check_logged_in_users() -> str:
+    """
+    Show currently logged-in users.
+    """
 
     return run_command(
         "who"
     )
 
 
-def check_failed_logins():
+def check_failed_logins() -> str:
+    """
+    Look for failed authentication attempts.
+    """
 
     command = (
-        "journalctl --no-pager -n 200 2>/dev/null "
+        "journalctl --no-pager -n 500 2>/dev/null "
         "| grep -Ei "
-        "'failed|invalid|authentication failure' "
-        "| tail -30"
+        "'failed password|authentication failure|invalid user|"
+        "failed login|failure' "
+        "| tail -50"
     )
 
     result = run_command(command)
 
-    if result.get("stdout"):
-
+    if result and "No output returned" not in result:
         return result
 
+    # Fallback for systems where journalctl does not contain
+    # authentication information.
     return run_command(
         "lastb -n 30 2>/dev/null"
     )
 
 
-def check_world_writable_files():
+def check_world_writable_files() -> str:
+    """
+    Find world-writable files in selected directories.
 
-    command = (
+    We intentionally limit the search to avoid scanning
+    the entire filesystem.
+    """
+
+    return run_command(
         "find /tmp /var/tmp /opt "
         "-xdev -type f -perm -0002 "
-        "-print 2>/dev/null "
-        "| head -50"
+        "-printf '%p\\n' "
+        "2>/dev/null | head -100"
     )
 
-    return run_command(command)
 
+def check_suid_files() -> str:
+    """
+    Find SUID binaries in common system directories.
+    """
 
-def check_suid_files():
-
-    command = (
+    return run_command(
         "find /usr/bin /usr/sbin /bin /sbin "
         "-xdev -type f -perm -4000 "
-        "-print 2>/dev/null "
-        "| head -50"
+        "-printf '%p\\n' "
+        "2>/dev/null | head -200"
     )
 
-    return run_command(command)
 
+def check_security_services() -> str:
+    """
+    Inspect security-related services.
+    """
 
-def check_security_services():
-
-    command = (
-        "systemctl --no-pager "
-        "--type=service "
-        "--state=running "
+    return run_command(
+        "systemctl --no-pager --type=service --state=running "
         "2>/dev/null "
         "| grep -Ei "
-        "'ssh|fail2ban|ufw|audit|firewalld'"
+        "'ssh|sshd|fail2ban|ufw|audit|firewalld'"
     )
 
-    return run_command(command)
 
+def check_system_info() -> str:
+    """
+    Collect basic host information.
+    """
 
-def check_system_info():
+    hostname = run_command(
+        "hostname"
+    )
 
-    command = (
-        "echo '=== HOSTNAME ==='; "
-        "hostname; "
-        "echo '=== OS ==='; "
-        "cat /etc/os-release 2>/dev/null | head -8; "
-        "echo '=== KERNEL ==='; "
-        "uname -a; "
-        "echo '=== UPTIME ==='; "
+    os_info = run_command(
+        "cat /etc/os-release 2>/dev/null "
+        "| grep -E '^(NAME|VERSION)='"
+    )
+
+    kernel = run_command(
+        "uname -a"
+    )
+
+    uptime = run_command(
         "uptime"
     )
 
-    return run_command(command)
+    return (
+        "HOSTNAME:\n"
+        f"{hostname}\n\n"
+        "OS:\n"
+        f"{os_info}\n\n"
+        "KERNEL:\n"
+        f"{kernel}\n\n"
+        "UPTIME:\n"
+        f"{uptime}"
+    )
 
 
-def security_audit():
+def security_audit() -> str:
+    """
+    Run the complete read-only security audit.
+    """
 
-    return {
+    results = {}
 
-        "system_info":
-            check_system_info(),
+    print("\n[SECURITY TOOL] Running complete security audit...")
 
-        "open_ports":
-            check_open_ports(),
+    print("[SECURITY TOOL] Checking system information...")
+    results["system_info"] = check_system_info()
 
-        "processes":
-            check_processes(),
+    print("[SECURITY TOOL] Checking open ports...")
+    results["open_ports"] = check_open_ports()
 
-        "logged_in_users":
-            check_logged_in_users(),
+    print("[SECURITY TOOL] Checking processes...")
+    results["processes"] = check_processes()
 
-        "failed_logins":
-            check_failed_logins(),
+    print("[SECURITY TOOL] Checking logged-in users...")
+    results["logged_in_users"] = check_logged_in_users()
 
-        "world_writable_files":
-            check_world_writable_files(),
+    print("[SECURITY TOOL] Checking failed logins...")
+    results["failed_logins"] = check_failed_logins()
 
-        "suid_files":
-            check_suid_files(),
+    print("[SECURITY TOOL] Checking world-writable files...")
+    results["world_writable_files"] = check_world_writable_files()
 
-        "security_services":
-            check_security_services(),
-    }
+    print("[SECURITY TOOL] Checking SUID files...")
+    results["suid_files"] = check_suid_files()
+
+    print("[SECURITY TOOL] Checking security services...")
+    results["security_services"] = check_security_services()
+
+    return json.dumps(
+        results,
+        indent=2,
+    )
 
 
-# =========================================================
+# ============================================================
 # TOOL REGISTRY
-# =========================================================
+# ============================================================
 
 TOOL_FUNCTIONS = {
-
-    "check_open_ports":
-        check_open_ports,
-
-    "check_processes":
-        check_processes,
-
-    "check_logged_in_users":
-        check_logged_in_users,
-
-    "check_failed_logins":
-        check_failed_logins,
-
-    "check_world_writable_files":
-        check_world_writable_files,
-
-    "check_suid_files":
-        check_suid_files,
-
-    "check_security_services":
-        check_security_services,
-
-    "check_system_info":
-        check_system_info,
-
-    "security_audit":
-        security_audit,
+    "check_open_ports": check_open_ports,
+    "check_processes": check_processes,
+    "check_logged_in_users": check_logged_in_users,
+    "check_failed_logins": check_failed_logins,
+    "check_world_writable_files": check_world_writable_files,
+    "check_suid_files": check_suid_files,
+    "check_security_services": check_security_services,
+    "check_system_info": check_system_info,
+    "security_audit": security_audit,
 }
 
 
-# =========================================================
+# ============================================================
 # GROQ TOOL DEFINITIONS
-# =========================================================
+# ============================================================
 
 TOOLS = [
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_open_ports",
-
-            "description":
-                "Check TCP and UDP ports currently "
-                "listening on the server.",
-
+            "name": "check_open_ports",
+            "description": (
+                "Check listening TCP and UDP ports and "
+                "the processes associated with them."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_processes",
-
-            "description":
-                "List running processes sorted by CPU "
-                "usage. Use this to identify unusual "
-                "or potentially suspicious processes.",
-
+            "name": "check_processes",
+            "description": (
+                "Check currently running Linux processes, "
+                "especially high CPU processes."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_logged_in_users",
-
-            "description":
-                "Check users currently logged into "
-                "the server.",
-
+            "name": "check_logged_in_users",
+            "description": (
+                "Check users currently logged into the Linux server."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_failed_logins",
-
-            "description":
-                "Check recent failed SSH and "
-                "authentication attempts.",
-
+            "name": "check_failed_logins",
+            "description": (
+                "Check failed authentication and login attempts."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_world_writable_files",
-
-            "description":
+            "name": "check_world_writable_files",
+            "description": (
                 "Find world-writable files in selected "
-                "system directories.",
-
+                "Linux directories."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_suid_files",
-
-            "description":
-                "Find SUID executables in common "
-                "system directories.",
-
+            "name": "check_suid_files",
+            "description": (
+                "Find SUID files in common Linux system directories."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_security_services",
-
-            "description":
-                "Check common security-related services "
-                "such as SSH, UFW, Fail2ban and audit "
-                "services.",
-
+            "name": "check_security_services",
+            "description": (
+                "Check running security-related services "
+                "such as SSH, fail2ban, UFW, auditd and firewalld."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "check_system_info",
-
-            "description":
-                "Collect hostname, operating system, "
-                "kernel and uptime information.",
-
+            "name": "check_system_info",
+            "description": (
+                "Collect hostname, operating system, kernel "
+                "and uptime information."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
-
     {
         "type": "function",
-
         "function": {
-
-            "name":
-                "security_audit",
-
-            "description":
-                "Perform a comprehensive read-only "
-                "security audit of the server.",
-
+            "name": "security_audit",
+            "description": (
+                "Run a complete read-only Linux security audit "
+                "including ports, processes, authentication, "
+                "SUID files, world-writable files, security "
+                "services and system information."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": [],
             },
         },
     },
-
 ]
 
 
-# =========================================================
+# ============================================================
 # SECURITY AGENT SYSTEM PROMPT
-# =========================================================
+# ============================================================
 
 SYSTEM_PROMPT = """
+You are a defensive Linux Security Investigation Agent.
 
-You are a professional Security Operations Agent.
+Your job is to investigate security questions using REAL
+telemetry from the Linux server.
 
-You are a defensive security specialist.
+You are a READ-ONLY security agent.
 
-Your job is to investigate Linux server security
-issues using REAL information collected from tools.
+============================================================
+CORE RULES
+============================================================
 
-You may receive requests directly from a user
-or from another AI agent through the A2A protocol.
+1. NEVER invent security findings.
 
-===========================================================
-PRIMARY RESPONSIBILITY
-===========================================================
+2. NEVER invent:
+   - ports
+   - processes
+   - PIDs
+   - usernames
+   - login attempts
+   - files
+   - services
+   - vulnerabilities
+   - IP addresses
+   - commands
+   - evidence
 
-You are responsible for security investigation.
+3. Use security tools whenever current telemetry is required.
 
-The DevOps Agent is responsible for broader
-infrastructure operations.
+4. A listening port is NOT automatically a vulnerability.
 
-When another agent delegates a security investigation
-to you, perform the security analysis and return
-your findings to the requesting agent.
+5. A running process is NOT automatically malicious.
 
-===========================================================
-INVESTIGATION WORKFLOW
-===========================================================
+6. A failed login attempt is NOT automatically evidence
+   of a successful compromise.
 
-Follow this workflow:
+7. A world-writable file is NOT automatically malicious.
 
-1. Understand the security question.
+8. A SUID binary is NOT automatically malicious.
 
-2. Collect current system information.
+9. Distinguish between:
+   - Observation
+   - Evidence
+   - Risk
+   - Hypothesis
+   - Confirmed finding
 
-3. Inspect network exposure.
+10. If evidence is insufficient, explicitly say:
 
-4. Inspect running processes.
+    "Insufficient evidence to determine this."
 
-5. Inspect authentication activity.
+============================================================
+SECURITY SEVERITY
+============================================================
 
-6. Check filesystem permissions.
+Use severity only when supported by evidence.
 
-7. Check security services.
+Possible levels:
 
-8. Correlate the evidence.
-
-9. Identify potential security risks.
-
-10. Recommend remediation.
-
-11. Report the findings.
-
-===========================================================
-AVAILABLE TOOLS
-===========================================================
-
-Network:
-
-- check_open_ports
-
-Processes:
-
-- check_processes
-
-Authentication:
-
-- check_logged_in_users
-- check_failed_logins
-
-Filesystem:
-
-- check_world_writable_files
-- check_suid_files
-
-Security services:
-
-- check_security_services
-
-System:
-
-- check_system_info
-
-Complete audit:
-
-- security_audit
-
-===========================================================
-REAL DATA RULE
-===========================================================
-
-Always use REAL information returned by tools.
-
-Never invent:
-
-- IP addresses
-- ports
-- processes
-- PIDs
-- usernames
-- login attempts
-- services
-- files
-- vulnerabilities
-- security findings
-
-If information is unavailable, say so.
-
-===========================================================
-NETWORK SECURITY RULE
-===========================================================
-
-A listening port is NOT automatically a vulnerability.
-
-For example:
-
-0.0.0.0:22
-
-does not automatically mean the server
-has been compromised.
-
-Determine:
-
-- what is listening
-- which process owns the port
-- whether the service is expected
-- whether additional evidence indicates risk
-
-===========================================================
-PROCESS SECURITY RULE
-===========================================================
-
-A process is NOT automatically malicious because:
-
-- it is unfamiliar
-- it is written in Python
-- it runs as root
-- it uses CPU
-- it listens on a port
-
-Additional evidence is required.
-
-===========================================================
-AUTHENTICATION RULE
-===========================================================
-
-Failed authentication attempts can represent:
-
-- accidental login failures
-- incorrect passwords
-- automated scanning
-- brute-force attempts
-
-Do not automatically claim compromise.
-
-Look for:
-
-- frequency
-- source information
-- usernames
-- timing
-- repeated patterns
-- supporting evidence
-
-===========================================================
-FILESYSTEM RULE
-===========================================================
-
-World-writable and SUID files may require investigation.
-
-Do not automatically classify them as malicious.
-
-Consider:
-
-- file location
-- owner
-- permissions
-- expected system behavior
-- supporting evidence
-
-===========================================================
-SEVERITY
-===========================================================
-
-When evidence supports a finding, classify it as:
-
-CRITICAL
-HIGH
-MEDIUM
 LOW
-INFORMATIONAL
+MEDIUM
+HIGH
+CRITICAL
 
-Do not assign a high severity without evidence.
+Do not assign HIGH or CRITICAL simply because something
+looks unusual.
 
-===========================================================
-READ-ONLY SECURITY AGENT
-===========================================================
+============================================================
+READ-ONLY POLICY
+============================================================
 
-This agent is currently READ-ONLY.
+You MUST NOT perform destructive actions.
 
-NEVER:
+Never:
 
 - kill processes
 - delete files
+- modify files
 - modify permissions
-- disable users
-- block IP addresses
-- change firewall rules
-- restart services
-- modify configuration
-- install software
+- modify firewall rules
+- disable services
+- create users
+- delete users
+- change passwords
+- install packages
+- modify SSH configuration
+- modify system configuration
 
-Instead, provide recommended remediation.
+You can recommend remediation steps, but you must not
+execute them.
 
-Actual remediation can be implemented later
-through an explicit approval workflow.
+============================================================
+INVESTIGATION WORKFLOW
+============================================================
 
-===========================================================
-A2A ROLE
-===========================================================
+Follow this workflow:
 
-You are a specialist Security Agent.
+1. UNDERSTAND THE SECURITY QUESTION
 
-Another agent may send you a task through A2A.
+2. COLLECT CURRENT TELEMETRY
 
-For example:
+3. CORRELATE THE EVIDENCE
 
-"Investigate whether this server has
-potential security issues."
+4. IDENTIFY POSSIBLE SECURITY RISKS
 
-When receiving an A2A task:
+5. DISTINGUISH FACT FROM HYPOTHESIS
 
-1. Understand the requested investigation.
+6. DETERMINE WHETHER THERE IS SUFFICIENT EVIDENCE
 
-2. Collect real evidence.
+7. RECOMMEND SAFE REMEDIATION
 
-3. Analyze the evidence.
-
-4. Identify supported findings.
-
-5. Explain uncertainty.
-
-6. Return a concise security report.
-
-Do not perform destructive remediation.
-
-===========================================================
+============================================================
 RESPONSE FORMAT
-===========================================================
+============================================================
 
 Return:
 
 Security Investigation
+----------------------
 
-Overall Assessment
+Overall Assessment:
+<summary>
 
-Findings
+Findings:
+1. <finding>
+2. <finding>
 
-Evidence
+Evidence:
+- <actual evidence>
 
-Risk
+Risk:
+<LOW / MEDIUM / HIGH / CRITICAL>
 
-Recommended Remediation
+Recommended Remediation:
+- <recommendation>
 
-Action Required
+Action Required:
+<what the infrastructure/security team should investigate
+or change>
 
-Keep the response concise and evidence-based.
+============================================================
+A2A ROLE
+============================================================
 
+You are a specialist Security Agent.
+
+Another agent may delegate security investigations to you
+through the A2A protocol.
+
+When receiving an A2A request:
+
+- investigate the requested security issue
+- use real telemetry
+- produce a concise security report
+- return the result to the calling agent
+- do not perform destructive remediation
 """
 
 
-# =========================================================
-# RUN SECURITY AGENT
-# =========================================================
+# ============================================================
+# GROQ AGENT
+# ============================================================
 
-def run_agent(task):
+def run_agent(user_input: str) -> str:
 
     messages = [
-
         {
-            "role":
-                "system",
-
-            "content":
-                SYSTEM_PROMPT,
+            "role": "system",
+            "content": SYSTEM_PROMPT,
         },
-
         {
-            "role":
-                "user",
-
-            "content":
-                task,
+            "role": "user",
+            "content": user_input,
         },
-
     ]
 
-    while True:
+    print("\n" + "=" * 60)
+    print("SECURITY AGENT")
+    print("=" * 60)
+
+    print(f"Request: {user_input}")
+    print(f"Model: {MODEL}")
+
+    max_iterations = 12
+
+    for iteration in range(max_iterations):
+
+        print(
+            f"\n[AGENT LOOP] Iteration {iteration + 1}"
+        )
 
         response = client.chat.completions.create(
-
             model=MODEL,
-
             messages=messages,
-
             tools=TOOLS,
-
             tool_choice="auto",
-
             temperature=0.2,
-
-            max_completion_tokens=2048,
-
+            max_completion_tokens=4096,
             reasoning_effort="medium",
         )
 
-        message = (
-            response
-            .choices[0]
-            .message
-        )
+        message = response.choices[0].message
 
-        # -------------------------------------------------
-        # FINAL RESPONSE
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # No tool calls -> final response
+        # ----------------------------------------------------
 
         if not message.tool_calls:
 
-            return {
-                "response":
-                    message.content or "",
-            }
+            final_response = message.content or ""
 
-        # -------------------------------------------------
-        # ADD ASSISTANT TOOL CALL MESSAGE
-        # -------------------------------------------------
+            print("\n[AGENT] Final response generated.")
 
-        messages.append(message)
+            return final_response
 
-        # -------------------------------------------------
-        # PROCESS TOOL CALLS
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Add assistant tool-call message
+        # ----------------------------------------------------
+
+        assistant_message = {
+            "role": "assistant",
+            "content": message.content or "",
+            "tool_calls": [],
+        }
 
         for tool_call in message.tool_calls:
 
-            tool_name = (
-                tool_call
-                .function
-                .name
-            )
-
-            # ---------------------------------------------
-            # Parse arguments
-            # ---------------------------------------------
-
-            try:
-
-                arguments = json.loads(
-                    tool_call
-                    .function
-                    .arguments
-                )
-
-            except json.JSONDecodeError:
-
-                arguments = {}
-
-            # ---------------------------------------------
-            # Find tool
-            # ---------------------------------------------
-
-            function = TOOL_FUNCTIONS.get(
-                tool_name
-            )
-
-            if not function:
-
-                result = {
-
-                    "success":
-                        False,
-
-                    "error":
-                        f"Unknown security tool: "
-                        f"{tool_name}",
+            assistant_message["tool_calls"].append(
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments,
+                    },
                 }
+            )
+
+        messages.append(assistant_message)
+
+        # ----------------------------------------------------
+        # Execute tools
+        # ----------------------------------------------------
+
+        for tool_call in message.tool_calls:
+
+            function_name = tool_call.function.name
+            arguments = tool_call.function.arguments
+
+            print(
+                f"\n[TOOL CALL] {function_name}"
+            )
+
+            print(
+                f"[TOOL ARGS] {arguments}"
+            )
+
+            function = TOOL_FUNCTIONS.get(function_name)
+
+            if function is None:
+
+                result = (
+                    f"Unknown security tool: "
+                    f"{function_name}"
+                )
 
             else:
 
                 try:
 
+                    parsed_arguments = {}
+
+                    if arguments:
+                        parsed_arguments = json.loads(
+                            arguments
+                        )
+
                     result = function(
-                        **arguments
+                        **parsed_arguments
                     )
 
-                except Exception as e:
+                except Exception as exc:
 
-                    result = {
+                    result = (
+                        f"Security tool failed: {exc}"
+                    )
 
-                        "success":
-                            False,
+            print(
+                f"[TOOL RESULT] {function_name}"
+            )
 
-                        "error":
-                            str(e),
-                    }
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": str(result),
+                }
+            )
 
-            # ---------------------------------------------
-            # Send tool result back to Groq
-            # ---------------------------------------------
-
-            messages.append({
-
-                "role":
-                    "tool",
-
-                "tool_call_id":
-                    tool_call.id,
-
-                "content":
-                    json.dumps(
-                        result,
-                        default=str,
-                    ),
-            })
+    return (
+        "The security investigation exceeded the maximum "
+        "number of investigation steps."
+    )
 
 
-# =========================================================
-# A2A AGENT EXECUTOR
-# =========================================================
+# ============================================================
+# A2A EXECUTOR
+# ============================================================
 
-class SecurityAgentExecutor(
-    AgentExecutor
-):
+class SecurityAgentExecutor(AgentExecutor):
+    """
+    Connects the Groq Security Agent to the A2A protocol.
+    """
 
     async def execute(
         self,
@@ -949,113 +756,110 @@ class SecurityAgentExecutor(
         event_queue: EventQueue,
     ) -> None:
 
-        # -------------------------------------------------
-        # Get incoming A2A task
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # Get or create task
+        # ----------------------------------------------------
 
-        user_input = context.get_user_input()
+        task = context.current_task
 
-        print()
-        print("========================================")
-        print("A2A REQUEST RECEIVED")
-        print("========================================")
-        print(user_input)
-        print()
+        if task is None:
 
-        # -------------------------------------------------
-        # Create task updater
-        # -------------------------------------------------
+            # The current A2A SDK expects the request task
+            # to be created and placed on the event queue.
+            from a2a.helpers import new_task_from_user_message
+
+            task = new_task_from_user_message(
+                context.message
+            )
+
+            await event_queue.enqueue_event(task)
+
+        # ----------------------------------------------------
+        # Create TaskUpdater
+        # ----------------------------------------------------
 
         updater = TaskUpdater(
             event_queue=event_queue,
-            task_id=context.task_id,
-            context_id=context.context_id,
+            task_id=task.id,
+            context_id=task.context_id,
         )
 
-        # -------------------------------------------------
-        # Mark task as working
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # TASK -> WORKING
+        # ----------------------------------------------------
 
         await updater.update_status(
-            state=TaskState.TASK_STATE_WORKING,
-            message=new_text_message(
-                "Security Agent is investigating..."
-            ),
+            state=TaskState.TASK_STATE_WORKING
         )
-
-        # -------------------------------------------------
-        # Run Security Agent
-        # -------------------------------------------------
 
         try:
 
-            result = run_agent(
+            # ------------------------------------------------
+            # Get incoming A2A message
+            # ------------------------------------------------
+
+            user_input = context.get_user_input()
+
+            print("\n")
+            print("=" * 60)
+            print("INCOMING A2A SECURITY REQUEST")
+            print("=" * 60)
+            print(user_input)
+            print("=" * 60)
+
+            # ------------------------------------------------
+            # Run Groq Security Agent
+            # ------------------------------------------------
+
+            response = run_agent(
                 user_input
             )
 
-            response = result.get(
-                "response",
-                "Security investigation completed.",
+            # ------------------------------------------------
+            # Add result artifact
+            # ------------------------------------------------
+
+            await updater.add_artifact(
+                parts=[
+                    Part(
+                        text=response
+                    )
+                ],
+                name="security-investigation-result",
             )
 
-        except Exception as e:
+            # ------------------------------------------------
+            # TASK -> COMPLETED
+            # ------------------------------------------------
 
-            print(
-                f"Security Agent error: {e}"
+            await updater.update_status(
+                state=TaskState.TASK_STATE_COMPLETED
             )
+
+            print("\n")
+            print("=" * 60)
+            print("A2A TASK COMPLETED")
+            print("=" * 60)
+
+        except Exception as exc:
+
+            print("\n")
+            print("=" * 60)
+            print("A2A SECURITY AGENT ERROR")
+            print("=" * 60)
+            print(str(exc))
+            print("=" * 60)
+
+            # ------------------------------------------------
+            # TASK -> FAILED
+            # ------------------------------------------------
 
             await updater.update_status(
                 state=TaskState.TASK_STATE_FAILED,
                 message=new_text_message(
-                    f"Security investigation failed: {e}"
+                    f"Security investigation failed: {exc}"
                 ),
-                final=True,
             )
-
-            return
-
-        # -------------------------------------------------
-        # Print result
-        # -------------------------------------------------
-
-        print()
-        print("SECURITY AGENT RESPONSE")
-        print("----------------------------------------")
-        print(response)
-        print("----------------------------------------")
-        print()
-
-        # -------------------------------------------------
-        # A2A v1.0 text Part
-        #
-        # IMPORTANT:
-        # TextPart is NOT used here.
-        #
-        # A2A v1.0 uses:
-        #
-        #     Part(text=response)
-        # -------------------------------------------------
-
-        await updater.add_artifact(
-            parts=[
-                Part(
-                    text=response,
-                )
-            ],
-            name="security-investigation-result",
-        )
-
-        # -------------------------------------------------
-        # Complete task
-        # -------------------------------------------------
-
-        await updater.update_status(
-            state=TaskState.TASK_STATE_COMPLETED,
-            message=new_text_message(
-                "Security investigation completed."
-            ),
-            final=True,
-        )
 
     async def cancel(
         self,
@@ -1063,37 +867,28 @@ class SecurityAgentExecutor(
         event_queue: EventQueue,
     ) -> None:
 
-        print(
-            "A2A task cancellation requested."
-        )
-
         raise NotImplementedError(
             "Security Agent cancellation is not supported."
         )
 
 
-# =========================================================
+# ============================================================
 # AGENT SKILLS
-# =========================================================
+# ============================================================
 
 security_audit_skill = AgentSkill(
-
     id="security-audit",
-
     name="Security Audit",
-
     description=(
         "Perform a read-only security audit "
         "of a Linux server."
     ),
-
     tags=[
         "security",
         "audit",
         "linux",
         "server",
     ],
-
     examples=[
         "Perform a security audit",
         "Check this server for security issues",
@@ -1103,23 +898,18 @@ security_audit_skill = AgentSkill(
 
 
 authentication_skill = AgentSkill(
-
     id="authentication-analysis",
-
     name="Authentication Analysis",
-
     description=(
         "Analyze failed login and "
         "authentication activity."
     ),
-
     tags=[
         "authentication",
         "ssh",
         "login",
         "security",
     ],
-
     examples=[
         "Check failed SSH logins",
         "Look for suspicious authentication attempts",
@@ -1128,22 +918,17 @@ authentication_skill = AgentSkill(
 
 
 network_skill = AgentSkill(
-
     id="network-analysis",
-
     name="Network Analysis",
-
     description=(
         "Inspect listening network ports "
         "and analyze exposed services."
     ),
-
     tags=[
         "network",
         "ports",
         "security",
     ],
-
     examples=[
         "Check open ports",
         "Analyze network exposure",
@@ -1151,101 +936,78 @@ network_skill = AgentSkill(
 )
 
 
-# =========================================================
+# ============================================================
 # AGENT CARD
-# =========================================================
+# ============================================================
 
 agent_card = AgentCard(
-
     name="Security Agent",
 
     description=(
         "A defensive security investigation agent "
-        "that performs read-only analysis of "
-        "Linux servers."
+        "that performs read-only analysis of Linux servers."
     ),
 
     supported_interfaces=[
-
         AgentInterface(
-
             url=PUBLIC_URL,
-
             protocol_binding="JSONRPC",
-
             protocol_version="1.0",
         )
     ],
 
     capabilities=AgentCapabilities(
-
         streaming=False,
-
         push_notifications=False,
     ),
 
     default_input_modes=[
-        "text/plain",
+        "text/plain"
     ],
 
     default_output_modes=[
-        "text/plain",
+        "text/plain"
     ],
 
     skills=[
-
         security_audit_skill,
-
         authentication_skill,
-
         network_skill,
     ],
 )
 
 
-# =========================================================
+# ============================================================
 # CREATE A2A SERVER
-# =========================================================
+# ============================================================
 
 def create_a2a_server():
 
-    # -----------------------------------------------------
+    # --------------------------------------------------------
     # Task storage
-    # -----------------------------------------------------
+    # --------------------------------------------------------
 
-    task_store = (
-        InMemoryTaskStore()
-    )
+    task_store = InMemoryTaskStore()
 
-    # -----------------------------------------------------
-    # Security Agent executor
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Agent executor
+    # --------------------------------------------------------
 
-    agent_executor = (
-        SecurityAgentExecutor()
-    )
+    agent_executor = SecurityAgentExecutor()
 
-    # -----------------------------------------------------
+    # --------------------------------------------------------
     # A2A request handler
-    # -----------------------------------------------------
+    # --------------------------------------------------------
 
-    request_handler = (
-        DefaultRequestHandler(
-
-            agent_executor=
-                agent_executor,
-
-            task_store=
-                task_store,
-
-            agent_card=
-                agent_card,
-        )
+    request_handler = DefaultRequestHandler(
+        agent_executor=agent_executor,
+        task_store=task_store,
+        agent_card=agent_card,
     )
 
-    # -----------------------------------------------------
-    # A2A routes
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # Routes
+    # --------------------------------------------------------
 
     routes = []
 
@@ -1262,31 +1024,29 @@ def create_a2a_server():
         )
     )
 
-    # -----------------------------------------------------
+    # --------------------------------------------------------
     # Starlette application
-    # -----------------------------------------------------
+    # --------------------------------------------------------
 
-    app = Starlette(
+    return Starlette(
         routes=routes
     )
 
-    return app
 
-
-# =========================================================
+# ============================================================
 # MAIN
-# =========================================================
+# ============================================================
 
 if __name__ == "__main__":
 
     print()
-    print("========================================")
+    print("=" * 40)
     print("        SECURITY A2A AGENT")
-    print("========================================")
+    print("=" * 40)
     print()
 
     print(
-        f"Server: {PUBLIC_URL}"
+        f"Server: http://localhost:{PORT}"
     )
 
     print()
@@ -1307,6 +1067,22 @@ if __name__ == "__main__":
 
     print(
         PUBLIC_URL
+    )
+
+    print()
+
+    print(
+        "A2A Protocol: 1.0"
+    )
+
+    print(
+        f"Groq Model: {MODEL}"
+    )
+
+    print()
+
+    print(
+        "Security Mode: READ-ONLY"
     )
 
     print()
