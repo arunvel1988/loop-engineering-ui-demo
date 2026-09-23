@@ -772,7 +772,12 @@ button.
 # RUN AGENT
 # =========================================================
 
-def run_agent(task, conversation_history=None):
+def run_agent(
+    task,
+    conversation_history=None,
+    conversation_id=None,
+    **kwargs
+):
 
     messages = [
 
