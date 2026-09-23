@@ -5,10 +5,28 @@ import subprocess
 import uvicorn
 from groq import Groq
 
-from a2a.server.agent_execution import AgentExecutor, RequestContext
+from starlette.applications import Starlette
+
+from a2a.server.agent_execution import (
+    AgentExecutor,
+    RequestContext,
+)
+
 from a2a.server.events import EventQueue
-from a2a.server.request_handlers import DefaultRequestHandler
-from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
+
+from a2a.server.request_handlers import (
+    DefaultRequestHandler,
+)
+
+from a2a.server.routes import (
+    create_agent_card_routes,
+    create_jsonrpc_routes,
+)
+
+from a2a.server.tasks import (
+    InMemoryTaskStore,
+    TaskUpdater,
+)
 
 from a2a.types import (
     AgentCapabilities,
@@ -16,11 +34,11 @@ from a2a.types import (
     AgentInterface,
     AgentSkill,
     Part,
-    
+    TaskState,
 )
 
-from a2a.server.apps import A2AStarletteApplication
-from a2a.utils import new_agent_text_message
+from a2a.helpers import new_text_message
+
 
 # =========================================================
 # CONFIGURATION
@@ -28,19 +46,19 @@ from a2a.utils import new_agent_text_message
 
 HOST = os.getenv(
     "A2A_HOST",
-    "0.0.0.0"
+    "0.0.0.0",
 )
 
 PORT = int(
     os.getenv(
         "A2A_PORT",
-        "9000"
+        "9000",
     )
 )
 
 PUBLIC_URL = os.getenv(
     "A2A_PUBLIC_URL",
-    f"http://localhost:{PORT}"
+    f"http://localhost:{PORT}",
 )
 
 
@@ -52,7 +70,7 @@ client = Groq()
 
 MODEL = os.getenv(
     "GROQ_MODEL",
-    "openai/gpt-oss-120b"
+    "openai/gpt-oss-120b",
 )
 
 
@@ -63,9 +81,6 @@ MODEL = os.getenv(
 def run_command(command):
     """
     Execute a read-only Linux security command.
-
-    IMPORTANT:
-    This Security Agent is intentionally read-only.
     """
 
     try:
@@ -89,19 +104,19 @@ def run_command(command):
 
         return {
             "success": False,
-            "error": "Command timed out."
+            "error": "Command timed out.",
         }
 
     except Exception as e:
 
         return {
             "success": False,
-            "error": str(e)
+            "error": str(e),
         }
 
 
 # =========================================================
-# SECURITY TOOL IMPLEMENTATIONS
+# SECURITY TOOLS
 # =========================================================
 
 def check_open_ports():
@@ -288,9 +303,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -313,9 +328,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -337,9 +352,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -361,9 +376,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -385,9 +400,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -409,9 +424,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -434,9 +449,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -458,9 +473,9 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
+                "required": [],
+            },
+        },
     },
 
 
@@ -482,10 +497,10 @@ TOOLS = [
 
                 "properties": {},
 
-                "required": []
-            }
-        }
-    }
+                "required": [],
+            },
+        },
+    },
 
 ]
 
@@ -503,8 +518,8 @@ You are a defensive security specialist.
 Your job is to investigate Linux server security
 issues using REAL information collected from tools.
 
-You may receive requests directly from a user or
-from another AI agent through the A2A protocol.
+You may receive requests directly from a user
+or from another AI agent through the A2A protocol.
 
 ===========================================================
 PRIMARY RESPONSIBILITY
@@ -778,7 +793,7 @@ def run_agent(task):
                 "system",
 
             "content":
-                SYSTEM_PROMPT
+                SYSTEM_PROMPT,
         },
 
         {
@@ -786,11 +801,10 @@ def run_agent(task):
                 "user",
 
             "content":
-                task
-        }
+                task,
+        },
 
     ]
-
 
     while True:
 
@@ -811,38 +825,32 @@ def run_agent(task):
             reasoning_effort="medium",
         )
 
-
         message = (
             response
             .choices[0]
             .message
         )
 
-
-        # =================================================
+        # -------------------------------------------------
         # FINAL RESPONSE
-        # =================================================
+        # -------------------------------------------------
 
         if not message.tool_calls:
 
             return {
                 "response":
-                    message.content or ""
+                    message.content or "",
             }
 
+        # -------------------------------------------------
+        # ADD ASSISTANT TOOL CALL MESSAGE
+        # -------------------------------------------------
 
-        # =================================================
-        # ADD ASSISTANT TOOL-CALL MESSAGE
-        # =================================================
+        messages.append(message)
 
-        messages.append(
-            message
-        )
-
-
-        # =================================================
+        # -------------------------------------------------
         # PROCESS TOOL CALLS
-        # =================================================
+        # -------------------------------------------------
 
         for tool_call in message.tool_calls:
 
@@ -852,10 +860,9 @@ def run_agent(task):
                 .name
             )
 
-
-            # -------------------------------------------------
-            # PARSE ARGUMENTS
-            # -------------------------------------------------
+            # ---------------------------------------------
+            # Parse arguments
+            # ---------------------------------------------
 
             try:
 
@@ -869,15 +876,13 @@ def run_agent(task):
 
                 arguments = {}
 
-
-            # -------------------------------------------------
-            # FIND TOOL
-            # -------------------------------------------------
+            # ---------------------------------------------
+            # Find tool
+            # ---------------------------------------------
 
             function = TOOL_FUNCTIONS.get(
                 tool_name
             )
-
 
             if not function:
 
@@ -888,7 +893,7 @@ def run_agent(task):
 
                     "error":
                         f"Unknown security tool: "
-                        f"{tool_name}"
+                        f"{tool_name}",
                 }
 
             else:
@@ -907,13 +912,12 @@ def run_agent(task):
                             False,
 
                         "error":
-                            str(e)
+                            str(e),
                     }
 
-
-            # =================================================
-            # SEND TOOL RESULT BACK TO GROQ
-            # =================================================
+            # ---------------------------------------------
+            # Send tool result back to Groq
+            # ---------------------------------------------
 
             messages.append({
 
@@ -926,13 +930,13 @@ def run_agent(task):
                 "content":
                     json.dumps(
                         result,
-                        default=str
-                    )
+                        default=str,
+                    ),
             })
 
 
 # =========================================================
-# A2A EXECUTOR
+# A2A AGENT EXECUTOR
 # =========================================================
 
 class SecurityAgentExecutor(
@@ -949,9 +953,7 @@ class SecurityAgentExecutor(
         # Get incoming A2A task
         # -------------------------------------------------
 
-        user_input = (
-            context.get_user_input()
-        )
+        user_input = context.get_user_input()
 
         print()
         print("========================================")
@@ -961,26 +963,13 @@ class SecurityAgentExecutor(
         print()
 
         # -------------------------------------------------
-        # Run Security Agent
-        # -------------------------------------------------
-
-        result = run_agent(
-            user_input
-        )
-
-        response = result.get(
-            "response",
-            "Security investigation completed."
-        )
-
-        # -------------------------------------------------
-        # Task updater
+        # Create task updater
         # -------------------------------------------------
 
         updater = TaskUpdater(
-            event_queue,
-            context.task_id,
-            context.context_id,
+            event_queue=event_queue,
+            task_id=context.task_id,
+            context_id=context.context_id,
         )
 
         # -------------------------------------------------
@@ -988,23 +977,71 @@ class SecurityAgentExecutor(
         # -------------------------------------------------
 
         await updater.update_status(
-            "working"
+            state=TaskState.TASK_STATE_WORKING,
+            message=new_text_message(
+                "Security Agent is investigating..."
+            ),
         )
 
         # -------------------------------------------------
-        # Return result as artifact
+        # Run Security Agent
+        # -------------------------------------------------
+
+        try:
+
+            result = run_agent(
+                user_input
+            )
+
+            response = result.get(
+                "response",
+                "Security investigation completed.",
+            )
+
+        except Exception as e:
+
+            print(
+                f"Security Agent error: {e}"
+            )
+
+            await updater.update_status(
+                state=TaskState.TASK_STATE_FAILED,
+                message=new_text_message(
+                    f"Security investigation failed: {e}"
+                ),
+                final=True,
+            )
+
+            return
+
+        # -------------------------------------------------
+        # Print result
+        # -------------------------------------------------
+
+        print()
+        print("SECURITY AGENT RESPONSE")
+        print("----------------------------------------")
+        print(response)
+        print("----------------------------------------")
+        print()
+
+        # -------------------------------------------------
+        # A2A v1.0 text Part
+        #
+        # IMPORTANT:
+        # TextPart is NOT used here.
+        #
+        # A2A v1.0 uses:
+        #
+        #     Part(text=response)
         # -------------------------------------------------
 
         await updater.add_artifact(
-
-            [
+            parts=[
                 Part(
-                    root=TextPart(
-                        text=response
-                    )
+                    text=response,
                 )
             ],
-
             name="security-investigation-result",
         )
 
@@ -1012,8 +1049,13 @@ class SecurityAgentExecutor(
         # Complete task
         # -------------------------------------------------
 
-        await updater.complete()
-
+        await updater.update_status(
+            state=TaskState.TASK_STATE_COMPLETED,
+            message=new_text_message(
+                "Security investigation completed."
+            ),
+            final=True,
+        )
 
     async def cancel(
         self,
@@ -1025,9 +1067,13 @@ class SecurityAgentExecutor(
             "A2A task cancellation requested."
         )
 
+        raise NotImplementedError(
+            "Security Agent cancellation is not supported."
+        )
+
 
 # =========================================================
-# AGENT CARD
+# AGENT SKILLS
 # =========================================================
 
 security_audit_skill = AgentSkill(
@@ -1105,6 +1151,10 @@ network_skill = AgentSkill(
 )
 
 
+# =========================================================
+# AGENT CARD
+# =========================================================
+
 agent_card = AgentCard(
 
     name="Security Agent",
@@ -1135,11 +1185,11 @@ agent_card = AgentCard(
     ),
 
     default_input_modes=[
-        "text"
+        "text/plain",
     ],
 
     default_output_modes=[
-        "text"
+        "text/plain",
     ],
 
     skills=[
@@ -1167,18 +1217,16 @@ def create_a2a_server():
         InMemoryTaskStore()
     )
 
-
     # -----------------------------------------------------
-    # Agent executor
+    # Security Agent executor
     # -----------------------------------------------------
 
     agent_executor = (
         SecurityAgentExecutor()
     )
 
-
     # -----------------------------------------------------
-    # Request handler
+    # A2A request handler
     # -----------------------------------------------------
 
     request_handler = (
@@ -1195,24 +1243,34 @@ def create_a2a_server():
         )
     )
 
-
     # -----------------------------------------------------
-    # A2A Starlette application
+    # A2A routes
     # -----------------------------------------------------
 
-    server = (
-        A2AStarletteApplication(
+    routes = []
 
-            agent_card=
-                agent_card,
-
-            http_handler=
-                request_handler,
+    routes.extend(
+        create_agent_card_routes(
+            agent_card
         )
     )
 
+    routes.extend(
+        create_jsonrpc_routes(
+            request_handler,
+            "/",
+        )
+    )
 
-    return server.build()
+    # -----------------------------------------------------
+    # Starlette application
+    # -----------------------------------------------------
+
+    app = Starlette(
+        routes=routes
+    )
+
+    return app
 
 
 # =========================================================
@@ -1228,8 +1286,10 @@ if __name__ == "__main__":
     print()
 
     print(
-        f"Server : {PUBLIC_URL}"
+        f"Server: {PUBLIC_URL}"
     )
+
+    print()
 
     print(
         "Agent Card:"
@@ -1260,10 +1320,7 @@ if __name__ == "__main__":
     app = create_a2a_server()
 
     uvicorn.run(
-
         app,
-
         host=HOST,
-
         port=PORT,
     )
