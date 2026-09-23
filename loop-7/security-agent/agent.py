@@ -16,11 +16,11 @@ from a2a.types import (
     AgentInterface,
     AgentSkill,
     Part,
-    TextPart,
+    
 )
 
 from a2a.server.apps import A2AStarletteApplication
-
+from a2a.utils import new_agent_text_message
 
 # =========================================================
 # CONFIGURATION
