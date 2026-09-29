@@ -1,329 +1,862 @@
-import json
 import os
+import json
 import time
+import atexit
+import traceback
 
 from groq import Groq
 from playwright.sync_api import sync_playwright
 
 
 # ============================================================
-# GROQ
+# GROQ CONFIGURATION
 # ============================================================
-
-client = Groq(
-    api_key=os.environ["GROQ_API_KEY"]
-)
 
 MODEL = "openai/gpt-oss-120b"
 
+client = Groq(
+    api_key=os.getenv("GROQ_API_KEY")
+)
+
 
 # ============================================================
-# BROWSER CONFIGURATION
+# AGENT CONFIGURATION
 # ============================================================
+
+MAX_TOOL_ITERATIONS = 20
+
+MAX_SHORT_TERM_MESSAGES = 12
+
+MAX_PAGE_CONTENT_CHARS = 12000
 
 BROWSER_DATA_DIR = os.path.expanduser(
     "~/.personal-agent-browser"
 )
 
-browser_context = None
+
+# ============================================================
+# PENDING HUMAN APPROVAL
+# ============================================================
+
+pending_action = None
+
+
+# ============================================================
+# PLAYWRIGHT
+# ============================================================
+
 playwright_instance = None
+browser_context = None
 
-
-# ============================================================
-# START HEADLESS BROWSER
-# ============================================================
 
 def start_browser():
+    """
+    Start persistent headless Chromium.
 
-    global browser_context
+    The persistent profile allows browser sessions/cookies
+    to remain available between requests.
+    """
+
     global playwright_instance
+    global browser_context
 
     if browser_context is not None:
         return browser_context
 
-    print()
-    print("=" * 70)
-    print("STARTING HEADLESS CHROMIUM")
-    print("=" * 70)
+    os.makedirs(
+        BROWSER_DATA_DIR,
+        exist_ok=True
+    )
+
+    print("Browser started.")
+    print(
+        f"Profile: {BROWSER_DATA_DIR}"
+    )
 
     playwright_instance = sync_playwright().start()
 
     browser_context = (
-        playwright_instance.chromium
+        playwright_instance
+        .chromium
         .launch_persistent_context(
-
             user_data_dir=BROWSER_DATA_DIR,
-
             headless=True,
-
             viewport={
                 "width": 1440,
                 "height": 900
             },
-
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
-                "--disable-gpu"
-            ]
+                "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+            ],
         )
     )
-
-    print("Browser started.")
-    print("Profile:", BROWSER_DATA_DIR)
 
     return browser_context
 
 
-# ============================================================
-# GET CURRENT PAGE
-# ============================================================
-
 def get_page():
+    """
+    Return the active browser page.
+
+    If no page exists, create one.
+    """
 
     context = start_browser()
 
-    if len(context.pages) == 0:
+    pages = context.pages
 
-        page = context.new_page()
+    if pages:
+        return pages[-1]
 
-    else:
-
-        page = context.pages[0]
-
-    return page
+    return context.new_page()
 
 
-# ============================================================
-# BROWSER OPEN
-# ============================================================
-
-def browser_open(url):
-
-    page = get_page()
-
-    print()
-    print("[BROWSER] Opening:", url)
-
-    page.goto(
-        url,
-        wait_until="domcontentloaded",
-        timeout=60000
-    )
-
-    time.sleep(1)
-
-    return {
-        "success": True,
-        "url": page.url,
-        "title": page.title()
-    }
+# Start browser when agent.py is imported.
+start_browser()
 
 
 # ============================================================
-# BROWSER READ
+# BROWSER TOOL: OPEN
 # ============================================================
 
-def browser_read():
-
-    page = get_page()
-
-    print(
-        "[BROWSER] Reading:",
-        page.url
-    )
+def browser_open(url: str):
+    """
+    Open a URL in the current browser page.
+    """
 
     try:
 
-        text = page.locator(
-            "body"
-        ).inner_text(
-            timeout=15000
+        page = get_page()
+
+        print()
+        print(
+            f"[BROWSER] Opening: {url}"
         )
 
-    except Exception as e:
-
-        return {
-            "success": False,
-            "error": str(e)
-        }
-
-    # Prevent massive pages from consuming Groq context.
-    text = text[:20000]
-
-    return {
-        "success": True,
-        "url": page.url,
-        "title": page.title(),
-        "content": text
-    }
-
-
-# ============================================================
-# BROWSER CLICK
-# ============================================================
-
-def browser_click(selector):
-
-    page = get_page()
-
-    print(
-        "[BROWSER] Clicking:",
-        selector
-    )
-
-    try:
-
-        page.locator(
-            selector
-        ).first.click(
+        page.goto(
+            url,
+            wait_until="domcontentloaded",
             timeout=30000
         )
 
-        time.sleep(1)
+        try:
+            page.wait_for_load_state(
+                "networkidle",
+                timeout=5000
+            )
+        except Exception:
+            pass
 
-        return {
+        result = {
             "success": True,
-            "url": page.url
+            "url": page.url,
+            "title": page.title(),
         }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
 
     except Exception as e:
 
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
         return {
             "success": False,
-            "error": str(e),
-            "url": page.url
+            "error": error,
         }
 
 
 # ============================================================
-# BROWSER TYPE
+# BROWSER TOOL: READ
+# ============================================================
+
+def browser_read():
+    """
+    Read visible text from the current webpage.
+    """
+
+    try:
+
+        page = get_page()
+
+        print()
+        print(
+            f"[BROWSER] Reading: {page.url}"
+        )
+
+        # Remove obvious non-content elements.
+        try:
+
+            page.evaluate(
+                """
+                () => {
+                    for (const selector of [
+                        'script',
+                        'style',
+                        'noscript'
+                    ]) {
+                        document
+                            .querySelectorAll(selector)
+                            .forEach(el => el.remove());
+                    }
+                }
+                """
+            )
+
+        except Exception:
+            pass
+
+        content = page.locator(
+            "body"
+        ).inner_text(
+            timeout=10000
+        )
+
+        content = content.strip()
+
+        if len(content) > MAX_PAGE_CONTENT_CHARS:
+
+            content = (
+                content[
+                    :MAX_PAGE_CONTENT_CHARS
+                ]
+                + "\n...[content truncated]"
+            )
+
+        result = {
+            "success": True,
+            "url": page.url,
+            "title": page.title(),
+            "content": content,
+        }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
+
+    except Exception as e:
+
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
+        return {
+            "success": False,
+            "error": error,
+        }
+
+
+# ============================================================
+# BROWSER TOOL: FIND
+# ============================================================
+
+def browser_find(pattern: str):
+    """
+    Find visible elements containing specific text.
+
+    This is important because the LLM should inspect the page
+    before trying to click something.
+    """
+
+    try:
+
+        page = get_page()
+
+        print()
+        print(
+            f"[BROWSER] Finding: {pattern}"
+        )
+
+        results = []
+
+        # ----------------------------------------------------
+        # TEXT MATCH
+        # ----------------------------------------------------
+
+        locator = page.get_by_text(
+            pattern,
+            exact=False
+        )
+
+        count = locator.count()
+
+        for index in range(
+            min(count, 30)
+        ):
+
+            element = locator.nth(index)
+
+            try:
+
+                if not element.is_visible():
+                    continue
+
+                text = (
+                    element.inner_text(
+                        timeout=2000
+                    )
+                    .strip()
+                )
+
+                tag = element.evaluate(
+                    "(el) => el.tagName.toLowerCase()"
+                )
+
+                html = element.evaluate(
+                    "(el) => el.outerHTML.slice(0, 1000)"
+                )
+
+                results.append(
+                    {
+                        "index": index,
+                        "tag": tag,
+                        "text": text[:500],
+                        "html": html,
+                    }
+                )
+
+            except Exception:
+                continue
+
+        # ----------------------------------------------------
+        # ARIA / ROLE MATCH
+        # ----------------------------------------------------
+
+        if not results:
+
+            for role in [
+                "button",
+                "link",
+                "textbox",
+                "combobox",
+                "checkbox",
+                "radio"
+            ]:
+
+                try:
+
+                    role_locator = page.get_by_role(
+                        role
+                    )
+
+                    role_count = (
+                        role_locator.count()
+                    )
+
+                    for index in range(
+                        min(role_count, 20)
+                    ):
+
+                        element = (
+                            role_locator.nth(index)
+                        )
+
+                        try:
+
+                            if not element.is_visible():
+                                continue
+
+                            text = (
+                                element.inner_text(
+                                    timeout=1000
+                                )
+                                .strip()
+                            )
+
+                            aria = (
+                                element.get_attribute(
+                                    "aria-label"
+                                )
+                            )
+
+                            if (
+                                pattern.lower()
+                                in (
+                                    text or ""
+                                ).lower()
+                                or
+                                pattern.lower()
+                                in (
+                                    aria or ""
+                                ).lower()
+                            ):
+
+                                results.append(
+                                    {
+                                        "index": index,
+                                        "role": role,
+                                        "text": text[:500],
+                                        "aria_label": aria,
+                                        "html": element.evaluate(
+                                            "(el) => el.outerHTML.slice(0, 1000)"
+                                        ),
+                                    }
+                                )
+
+                        except Exception:
+                            continue
+
+                except Exception:
+                    continue
+
+        result = {
+            "success": True,
+            "url": page.url,
+            "pattern": pattern,
+            "matches": results[:30],
+            "count": len(results),
+        }
+
+        print(
+            f"[BROWSER RESULT] Found {len(results)} matches"
+        )
+
+        return result
+
+    except Exception as e:
+
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
+        return {
+            "success": False,
+            "error": error,
+        }
+
+
+# ============================================================
+# BROWSER TOOL: CLICK
+# ============================================================
+
+def browser_click(selector: str):
+    """
+    Click a specific visible element.
+
+    The agent should preferably use a specific selector
+    discovered with browser_find.
+    """
+
+    try:
+
+        page = get_page()
+
+        print()
+        print(
+            f"[BROWSER] Clicking: {selector}"
+        )
+
+        locator = page.locator(
+            selector
+        )
+
+        count = locator.count()
+
+        if count == 0:
+
+            return {
+                "success": False,
+                "error": (
+                    f"No element found for selector: "
+                    f"{selector}"
+                ),
+                "url": page.url,
+            }
+
+        # ----------------------------------------------------
+        # Find a visible matching element.
+        # ----------------------------------------------------
+
+        visible_element = None
+
+        for index in range(
+            min(count, 20)
+        ):
+
+            candidate = locator.nth(index)
+
+            try:
+
+                if candidate.is_visible():
+                    visible_element = candidate
+                    break
+
+            except Exception:
+                continue
+
+        if visible_element is None:
+
+            return {
+                "success": False,
+                "error": (
+                    f"Elements matched '{selector}', "
+                    "but none are visible."
+                ),
+                "url": page.url,
+            }
+
+        # ----------------------------------------------------
+        # Click.
+        # ----------------------------------------------------
+
+        visible_element.click(
+            timeout=8000
+        )
+
+        time.sleep(0.5)
+
+        try:
+            page.wait_for_load_state(
+                "domcontentloaded",
+                timeout=3000
+            )
+        except Exception:
+            pass
+
+        result = {
+            "success": True,
+            "url": page.url,
+            "title": page.title(),
+        }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
+
+    except Exception as e:
+
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
+        return {
+            "success": False,
+            "error": error,
+            "url": get_page().url,
+        }
+
+
+# ============================================================
+# BROWSER TOOL: TYPE
 # ============================================================
 
 def browser_type(
-    selector,
-    text
+    selector: str,
+    text: str
 ):
-
-    page = get_page()
-
-    print(
-        "[BROWSER] Typing into:",
-        selector
-    )
+    """
+    Type text into a specific input.
+    """
 
     try:
 
-        page.locator(
-            selector
-        ).first.fill(
-            text
+        page = get_page()
+
+        print()
+        print(
+            f"[BROWSER] Typing into: {selector}"
         )
 
-        return {
+        locator = page.locator(
+            selector
+        )
+
+        count = locator.count()
+
+        if count == 0:
+
+            return {
+                "success": False,
+                "error": (
+                    f"No element found for selector: "
+                    f"{selector}"
+                ),
+            }
+
+        visible_element = None
+
+        for index in range(
+            min(count, 20)
+        ):
+
+            candidate = locator.nth(index)
+
+            try:
+
+                if candidate.is_visible():
+                    visible_element = candidate
+                    break
+
+            except Exception:
+                continue
+
+        if visible_element is None:
+
+            return {
+                "success": False,
+                "error": (
+                    f"No visible element found for: "
+                    f"{selector}"
+                ),
+            }
+
+        visible_element.fill(
+            text,
+            timeout=8000
+        )
+
+        result = {
             "success": True,
-            "selector": selector
+            "url": page.url,
+            "selector": selector,
         }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
 
     except Exception as e:
 
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
         return {
             "success": False,
-            "error": str(e)
+            "error": error,
         }
 
 
 # ============================================================
-# BROWSER PRESS
+# BROWSER TOOL: PRESS
 # ============================================================
 
 def browser_press(
-    selector,
-    key
+    selector: str,
+    key: str
 ):
-
-    page = get_page()
+    """
+    Press a keyboard key on a specific element.
+    """
 
     try:
 
-        page.locator(
-            selector
-        ).first.press(
-            key
+        page = get_page()
+
+        print()
+        print(
+            f"[BROWSER] Pressing {key} on {selector}"
         )
 
-        time.sleep(1)
+        locator = page.locator(
+            selector
+        )
 
-        return {
+        count = locator.count()
+
+        if count == 0:
+
+            return {
+                "success": False,
+                "error": (
+                    f"No element found for selector: "
+                    f"{selector}"
+                ),
+            }
+
+        visible_element = None
+
+        for index in range(
+            min(count, 20)
+        ):
+
+            candidate = locator.nth(index)
+
+            try:
+
+                if candidate.is_visible():
+                    visible_element = candidate
+                    break
+
+            except Exception:
+                continue
+
+        if visible_element is None:
+
+            return {
+                "success": False,
+                "error": (
+                    f"No visible element found for: "
+                    f"{selector}"
+                ),
+            }
+
+        visible_element.press(
+            key,
+            timeout=8000
+        )
+
+        time.sleep(0.5)
+
+        result = {
             "success": True,
-            "url": page.url
+            "url": page.url,
+            "title": page.title(),
         }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
 
     except Exception as e:
 
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
         return {
             "success": False,
-            "error": str(e)
+            "error": error,
         }
 
 
 # ============================================================
-# BROWSER SCREENSHOT
+# BROWSER TOOL: BACK
+# ============================================================
+
+def browser_back():
+    """
+    Go back one page.
+    """
+
+    try:
+
+        page = get_page()
+
+        print()
+        print("[BROWSER] Going back")
+
+        page.go_back(
+            wait_until="domcontentloaded",
+            timeout=15000
+        )
+
+        result = {
+            "success": True,
+            "url": page.url,
+            "title": page.title(),
+        }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
+
+    except Exception as e:
+
+        error = str(e)
+
+        print(
+            f"[BROWSER ERROR] {error}"
+        )
+
+        return {
+            "success": False,
+            "error": error,
+        }
+
+
+# ============================================================
+# BROWSER TOOL: SCREENSHOT
 # ============================================================
 
 def browser_screenshot():
+    """
+    Take a screenshot of the current page.
 
-    page = get_page()
-
-    path = "/tmp/personal-agent-browser.png"
+    Useful for debugging browser automation.
+    """
 
     try:
+
+        page = get_page()
+
+        timestamp = int(
+            time.time()
+        )
+
+        screenshot_dir = os.path.expanduser(
+            "~/personal-agent-screenshots"
+        )
+
+        os.makedirs(
+            screenshot_dir,
+            exist_ok=True
+        )
+
+        path = os.path.join(
+            screenshot_dir,
+            f"screenshot-{timestamp}.png"
+        )
 
         page.screenshot(
             path=path,
             full_page=True
         )
 
-        return {
+        result = {
             "success": True,
             "path": path,
-            "url": page.url
+            "url": page.url,
+            "title": page.title(),
         }
+
+        print(
+            f"[BROWSER RESULT] {result}"
+        )
+
+        return result
 
     except Exception as e:
 
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        error = str(e)
 
-
-# ============================================================
-# BROWSER BACK
-# ============================================================
-
-def browser_back():
-
-    page = get_page()
-
-    try:
-
-        page.go_back(
-            wait_until="domcontentloaded",
-            timeout=30000
+        print(
+            f"[BROWSER ERROR] {error}"
         )
 
         return {
-            "success": True,
-            "url": page.url,
-            "title": page.title()
-        }
-
-    except Exception as e:
-
-        return {
             "success": False,
-            "error": str(e)
+            "error": error,
         }
 
 
@@ -331,322 +864,316 @@ def browser_back():
 # HUMAN APPROVAL
 # ============================================================
 
-pending_action = None
-
-
 def request_approval(
-    action,
-    description
+    action: str,
+    description: str
 ):
+    """
+    Ask the application/user for approval before a
+    sensitive action.
+
+    This function does NOT perform the action.
+    """
 
     global pending_action
 
     pending_action = {
-
         "action": action,
-
         "description": description,
-
-        "status": "pending"
-
+        "created_at": time.time(),
     }
 
     print()
     print("=" * 70)
     print("HUMAN APPROVAL REQUIRED")
     print("=" * 70)
-
     print(
-        json.dumps(
-            pending_action,
-            indent=2
-        )
+        f"Action: {action}"
     )
-
+    print(
+        f"Description: {description}"
+    )
     print("=" * 70)
 
     return {
-
         "success": False,
-
-        "requires_approval": True,
-
+        "approval_required": True,
         "action": action,
-
         "description": description,
-
-        "message":
+        "message": (
             "Human approval is required before "
-            "this action can continue."
-
+            "this action can be performed."
+        ),
     }
 
 
 # ============================================================
-# TOOL DEFINITIONS
+# TOOL DEFINITIONS FOR GROQ
 # ============================================================
 
 TOOLS = [
 
+    # --------------------------------------------------------
+    # BROWSER OPEN
+    # --------------------------------------------------------
+
     {
         "type": "function",
-
         "function": {
-
             "name": "browser_open",
-
-            "description":
-                "Open a URL in the headless Chromium browser.",
-
+            "description": (
+                "Open a website URL in the headless browser. "
+                "Use this when the user asks you to visit a website."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {
-
                     "url": {
                         "type": "string",
-                        "description":
-                            "Complete URL to open."
+                        "description": (
+                            "Complete URL including https://"
+                        )
                     }
-
                 },
-
                 "required": ["url"]
-
             }
-
         }
-
     },
+
+    # --------------------------------------------------------
+    # BROWSER READ
+    # --------------------------------------------------------
 
     {
         "type": "function",
-
         "function": {
-
             "name": "browser_read",
-
-            "description":
-                "Read the visible text from the current webpage.",
-
+            "description": (
+                "Read the visible text content of the "
+                "currently open webpage."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": []
-
             }
-
         }
-
     },
+
+    # --------------------------------------------------------
+    # BROWSER FIND
+    # --------------------------------------------------------
 
     {
         "type": "function",
-
         "function": {
-
-            "name": "browser_click",
-
-            "description":
-                "Click an element on the current webpage "
-                "using a CSS selector.",
-
+            "name": "browser_find",
+            "description": (
+                "Find visible webpage elements containing "
+                "specific text. Use this BEFORE clicking or "
+                "typing when the exact selector is unknown. "
+                "Returns matching elements, text, HTML and "
+                "ARIA information."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": (
+                            "Text to search for on the current webpage."
+                        )
+                    }
+                },
+                "required": ["pattern"]
+            }
+        }
+    },
 
+    # --------------------------------------------------------
+    # BROWSER CLICK
+    # --------------------------------------------------------
+
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": (
+                "Click a specific visible webpage element "
+                "using a CSS selector. Do not use generic "
+                "selectors such as 'button' when multiple "
+                "elements may exist. Use browser_find first "
+                "to identify the correct element."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
                     "selector": {
                         "type": "string",
-                        "description":
-                            "CSS selector for the element."
+                        "description": (
+                            "Specific CSS selector for the element."
+                        )
                     }
-
                 },
-
                 "required": ["selector"]
-
             }
-
         }
-
     },
+
+    # --------------------------------------------------------
+    # BROWSER TYPE
+    # --------------------------------------------------------
 
     {
         "type": "function",
-
         "function": {
-
             "name": "browser_type",
-
-            "description":
-                "Type text into a webpage input using "
-                "a CSS selector.",
-
+            "description": (
+                "Enter text into a visible webpage input "
+                "using a CSS selector."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {
-
                     "selector": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "Specific CSS selector for the input."
+                        )
                     },
-
                     "text": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "Text to enter."
+                        )
                     }
-
                 },
-
                 "required": [
                     "selector",
                     "text"
                 ]
-
             }
-
         }
-
     },
+
+    # --------------------------------------------------------
+    # BROWSER PRESS
+    # --------------------------------------------------------
 
     {
         "type": "function",
-
         "function": {
-
             "name": "browser_press",
-
-            "description":
-                "Press a keyboard key on a webpage element.",
-
+            "description": (
+                "Press a keyboard key on a visible webpage "
+                "element. Example: Enter."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {
-
                     "selector": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "CSS selector for the target element."
+                        )
                     },
-
                     "key": {
                         "type": "string",
-                        "description":
+                        "description": (
                             "Keyboard key such as Enter, Tab, "
                             "Escape, ArrowDown."
+                        )
                     }
-
                 },
-
                 "required": [
                     "selector",
                     "key"
                 ]
-
             }
-
         }
-
     },
+
+    # --------------------------------------------------------
+    # BROWSER BACK
+    # --------------------------------------------------------
 
     {
         "type": "function",
-
         "function": {
-
-            "name": "browser_screenshot",
-
-            "description":
-                "Take a screenshot of the current webpage.",
-
-            "parameters": {
-
-                "type": "object",
-
-                "properties": {},
-
-                "required": []
-
-            }
-
-        }
-
-    },
-
-    {
-        "type": "function",
-
-        "function": {
-
             "name": "browser_back",
-
-            "description":
-                "Navigate the browser back to the previous page.",
-
+            "description": (
+                "Navigate back to the previous webpage."
+            ),
             "parameters": {
-
                 "type": "object",
-
                 "properties": {},
-
                 "required": []
-
             }
-
         }
-
     },
+
+    # --------------------------------------------------------
+    # BROWSER SCREENSHOT
+    # --------------------------------------------------------
 
     {
         "type": "function",
-
         "function": {
-
-            "name": "request_approval",
-
-            "description":
-                "Request explicit human approval before "
-                "a financial, booking, purchase, payment, "
-                "email-send, deletion, or other irreversible action.",
-
+            "name": "browser_screenshot",
+            "description": (
+                "Take a screenshot of the current webpage "
+                "for debugging browser automation."
+            ),
             "parameters": {
-
                 "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
 
+    # --------------------------------------------------------
+    # HUMAN APPROVAL
+    # --------------------------------------------------------
+
+    {
+        "type": "function",
+        "function": {
+            "name": "request_approval",
+            "description": (
+                "Request human approval before performing "
+                "a sensitive, financial, destructive or "
+                "irreversible action."
+            ),
+            "parameters": {
+                "type": "object",
                 "properties": {
-
                     "action": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "Short name of the requested action."
+                        )
                     },
-
                     "description": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "Detailed explanation of what "
+                            "will happen."
+                        )
                     }
-
                 },
-
                 "required": [
                     "action",
                     "description"
                 ]
-
             }
-
         }
-
-    }
-
+    },
 ]
 
 
 # ============================================================
-# TOOL MAP
+# TOOL FUNCTION MAP
 # ============================================================
 
 TOOL_FUNCTIONS = {
@@ -657,6 +1184,9 @@ TOOL_FUNCTIONS = {
     "browser_read":
         browser_read,
 
+    "browser_find":
+        browser_find,
+
     "browser_click":
         browser_click,
 
@@ -666,15 +1196,14 @@ TOOL_FUNCTIONS = {
     "browser_press":
         browser_press,
 
-    "browser_screenshot":
-        browser_screenshot,
-
     "browser_back":
         browser_back,
 
-    "request_approval":
-        request_approval
+    "browser_screenshot":
+        browser_screenshot,
 
+    "request_approval":
+        request_approval,
 }
 
 
@@ -683,166 +1212,386 @@ TOOL_FUNCTIONS = {
 # ============================================================
 
 SYSTEM_PROMPT = """
+You are a personal AI assistant running on a GCP Ubuntu VM.
 
-You are a personal AI assistant running on the user's
-GCP Ubuntu VM.
+You have access to a real headless Chromium browser through
+Playwright.
 
-You help the user perform personal computer and web tasks.
-
-============================================================
-CAPABILITIES
-============================================================
-
-You can:
-
-- browse websites
-- open URLs
-- read webpages
-- click webpage elements
-- type into webpage fields
-- press keyboard keys
-- navigate backwards
-- take screenshots
-- research travel
-- research railway information
-- navigate websites
+You can browse websites and interact with webpages.
 
 ============================================================
-BROWSER
+BROWSER CAPABILITIES
 ============================================================
 
-The browser is Chromium running HEADLESS on the GCP VM.
+Available browser tools:
 
-You cannot see the browser visually.
-
-Therefore:
-
-1. Open the website.
-2. Read the page.
-3. Use the information returned by browser_read.
-4. Determine the appropriate selector.
-5. Click/type.
-6. Read the page again.
-
-Never invent webpage information.
+- browser_open
+- browser_read
+- browser_find
+- browser_click
+- browser_type
+- browser_press
+- browser_back
+- browser_screenshot
 
 ============================================================
-LOGIN
+BROWSER WORKFLOW
 ============================================================
 
-If a website requires authentication:
+When the user asks you to interact with a website:
 
-DO NOT ask the user to provide their password
-to the AI.
+1. OPEN the website.
+2. READ the page.
+3. FIND the desired element if necessary.
+4. CLICK or TYPE using a specific selector.
+5. READ the resulting page again.
+6. Continue until the requested task is complete.
 
-Do not store passwords in the agent.
+Do not assume that a webpage contains something.
 
-The user must authenticate using an appropriate
-authentication mechanism.
+Use browser_read or browser_find to inspect the actual page.
 
-If authentication cannot be completed because the
-website requires interactive human verification,
-stop and tell the user.
+Never invent webpage content, prices, availability,
+search results, train information, flight information,
+product information or account information.
 
 ============================================================
-RAILWAY / TRAVEL
+IMPORTANT SELECTOR RULES
 ============================================================
 
-You may search for railway/travel options.
+Never blindly use generic selectors such as:
 
-You may navigate through the booking process
-to the point immediately before final purchase/payment.
+button
+input
+a
+div
 
-You MUST NOT automatically complete:
+when there may be multiple matching elements.
 
-- payment
-- final ticket purchase
-- irreversible booking
+For example, DO NOT immediately do:
 
-Before such an action:
+browser_click("button")
 
-CALL request_approval.
+Instead:
+
+1. browser_read
+2. browser_find("Sign in")
+3. inspect the returned HTML/ARIA information
+4. use a specific selector
+
+Prefer selectors such as:
+
+#search
+input[name="q"]
+input[aria-label="Search"]
+button[aria-label="Search"]
+a[href="..."]
+
+Use browser_find whenever the correct element is not obvious.
+
+============================================================
+ERROR HANDLING
+============================================================
+
+If a browser action fails:
+
+1. Read the page again.
+2. Find the element again.
+3. Use a more specific selector.
+4. Retry only when there is a reasonable new selector.
+
+Do not repeatedly call the same failed tool with the
+same selector.
+
+If a tool reports that an element is hidden, do not
+continue clicking that hidden element.
 
 ============================================================
 SENSITIVE ACTIONS
 ============================================================
 
-Human approval is REQUIRED before:
+You may browse and research freely.
 
-- buying anything
-- booking a ticket
-- making payment
+However, you must request human approval before:
+
+- purchasing something
+- placing an order
+- making a payment
+- booking a railway ticket
+- booking a flight
+- booking a hotel
 - sending an email
+- sending a message
 - deleting data
+- cancelling something
 - submitting an irreversible form
 - changing important account settings
+- any other irreversible or financially significant action
 
-Do NOT execute these actions automatically.
+Use request_approval before such actions.
 
-============================================================
-READ VS ACTION
-============================================================
+Do not enter passwords into webpages.
 
-These normally do not require approval:
-
-- opening websites
-- searching
-- reading webpages
-- comparing prices
-- reading public information
-
-These require approval:
-
-- purchase
-- booking
-- payment
-- send
-- delete
-- irreversible submission
+Do not ask the user to give you their password.
 
 ============================================================
-BROWSER LOOP
+RAILWAY / TRAVEL
 ============================================================
 
-For browser tasks use:
+You may:
 
-OPEN
-  ↓
-READ
-  ↓
-DECIDE
-  ↓
-CLICK / TYPE
-  ↓
-READ AGAIN
-  ↓
-DECIDE
-  ↓
-repeat
+- search trains
+- inspect schedules
+- inspect availability
+- compare options
+- navigate through booking pages
 
-Stop when the user's task is complete.
+But before final booking, payment or ticket purchase,
+request human approval.
 
 ============================================================
-IMPORTANT
+EMAIL
 ============================================================
 
-Never invent:
+You may eventually work with email through an authenticated
+connector or browser session.
 
-- prices
-- train names
-- train times
-- availability
-- account information
-- webpage contents
-- confirmation numbers
+Reading/searching email can be performed when available.
 
-Use browser tools to obtain current information.
+Sending an email requires human approval.
 
+Never ask the user for their email password.
+
+============================================================
+LOGIN
+============================================================
+
+The browser uses a persistent Chromium profile.
+
+The user may manually authenticate in the browser environment.
+
+Never request passwords through chat.
+
+Do not claim that the user is logged in unless the webpage
+actually shows evidence of an authenticated session.
+
+============================================================
+CURRENT PAGE
+============================================================
+
+Remember that browser state persists during the agent session.
+
+If the user says:
+
+"read it"
+
+"what does it say?"
+
+"continue"
+
+"click that"
+
+"search this"
+
+use the current browser page and conversation context.
+
+============================================================
+TRUTHFULNESS
+============================================================
+
+Always distinguish between:
+
+- information actually returned by browser tools
+- information provided by the user
+- your own reasoning
+
+Never fabricate browser results.
+
+============================================================
+GENERAL BEHAVIOR
+============================================================
+
+You are an action-oriented personal assistant.
+
+Use tools when tools are required.
+
+Do not tell the user that you cannot access websites
+when browser tools are available.
+
+Do not merely explain how the user could browse a website
+when the user explicitly asked you to browse it.
+
+Actually use the browser tools.
+
+When the task is complete, provide a concise answer.
 """
 
 
 # ============================================================
-# RUN AGENT
+# CONVERSATION CLEANING
+# ============================================================
+
+def clean_conversation_history(
+    conversation_history
+):
+    """
+    Keep only recent user/assistant messages.
+    """
+
+    if not conversation_history:
+        return []
+
+    cleaned = []
+
+    recent = conversation_history[
+        -MAX_SHORT_TERM_MESSAGES:
+    ]
+
+    for item in recent:
+
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        role = item.get(
+            "role"
+        )
+
+        content = item.get(
+            "content",
+            ""
+        )
+
+        if role not in [
+            "user",
+            "assistant"
+        ]:
+            continue
+
+        if not content:
+            continue
+
+        if len(content) > 4000:
+
+            content = (
+                content[:4000]
+                + "\n...[truncated]"
+            )
+
+        cleaned.append(
+            {
+                "role": role,
+                "content": content
+            }
+        )
+
+    return cleaned
+
+
+# ============================================================
+# TOOL ARGUMENT PARSER
+# ============================================================
+
+def parse_tool_arguments(
+    arguments
+):
+    """
+    Safely parse Groq tool arguments.
+    """
+
+    if arguments is None:
+        return {}
+
+    if isinstance(
+        arguments,
+        dict
+    ):
+        return arguments
+
+    try:
+        return json.loads(
+            arguments
+        )
+
+    except Exception:
+        return {}
+
+
+# ============================================================
+# TOOL EXECUTION
+# ============================================================
+
+def execute_tool(
+    tool_name,
+    arguments
+):
+    """
+    Execute one registered tool.
+    """
+
+    print()
+    print(
+        f"[AGENT TOOL] {tool_name}"
+    )
+
+    print(
+        f"[ARGUMENTS] {arguments}"
+    )
+
+    function = TOOL_FUNCTIONS.get(
+        tool_name
+    )
+
+    if function is None:
+
+        error = (
+            f"Tool '{tool_name}' is not registered."
+        )
+
+        print(
+            f"[TOOL ERROR] {error}"
+        )
+
+        return {
+            "success": False,
+            "error": error,
+            "available_tools": list(
+                TOOL_FUNCTIONS.keys()
+            ),
+        }
+
+    try:
+
+        result = function(
+            **arguments
+        )
+
+        print(
+            f"[TOOL RESULT] {result}"
+        )
+
+        return result
+
+    except Exception as e:
+
+        error = str(e)
+
+        print(
+            f"[TOOL ERROR] {error}"
+        )
+
+        traceback.print_exc()
+
+        return {
+            "success": False,
+            "error": error,
+        }
+
+
+# ============================================================
+# MAIN AGENT
 # ============================================================
 
 def run_agent(
@@ -851,93 +1600,124 @@ def run_agent(
     conversation_id=None,
     **kwargs
 ):
+    """
+    Main personal AI agent.
 
-    global pending_action
+    Compatible with the Flask application:
 
-    pending_action = None
+        result = run_agent(
+            task=prompt,
+            conversation_history=history,
+            conversation_id=session_id
+        )
+    """
+
+    print()
+    print("=" * 70)
+    print("CHAT REQUEST")
+    print(
+        f"Conversation: {conversation_id}"
+    )
+    print(
+        f"Previous messages: "
+        f"{len(conversation_history or [])}"
+    )
+    print(
+        f"User: {task}"
+    )
+    print("=" * 70)
+
+    # --------------------------------------------------------
+    # BUILD MESSAGES
+    # --------------------------------------------------------
 
     messages = [
-
         {
             "role": "system",
             "content": SYSTEM_PROMPT
         }
-
     ]
 
     # --------------------------------------------------------
-    # EXISTING FLASK CHAT HISTORY
+    # PREVIOUS CONVERSATION
     # --------------------------------------------------------
 
-    if conversation_history:
+    history = clean_conversation_history(
+        conversation_history
+    )
 
-        for item in conversation_history:
-
-            if not isinstance(
-                item,
-                dict
-            ):
-                continue
-
-            role = item.get("role")
-
-            content = item.get(
-                "content"
-            )
-
-            if role and content:
-
-                messages.append({
-
-                    "role": role,
-
-                    "content": content
-
-                })
+    messages.extend(
+        history
+    )
 
     # --------------------------------------------------------
-    # CURRENT REQUEST
+    # CURRENT USER REQUEST
     # --------------------------------------------------------
 
-    messages.append({
-
-        "role": "user",
-
-        "content": task
-
-    })
+    messages.append(
+        {
+            "role": "user",
+            "content": task
+        }
+    )
 
     # --------------------------------------------------------
-    # ORCHESTRATION LOOP
+    # TOOL LOOP
     # --------------------------------------------------------
 
-    for iteration in range(20):
+    for iteration in range(
+        1,
+        MAX_TOOL_ITERATIONS + 1
+    ):
 
         print()
         print("=" * 70)
         print(
-            "AGENT ITERATION:",
-            iteration + 1
+            f"AGENT ITERATION: {iteration}"
         )
         print("=" * 70)
 
-        response = client.chat.completions.create(
+        # ----------------------------------------------------
+        # CALL GROQ
+        # ----------------------------------------------------
 
-            model=MODEL,
+        try:
 
-            messages=messages,
+            response = (
+                client
+                .chat
+                .completions
+                .create(
+                    model=MODEL,
+                    messages=messages,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                    temperature=0.2,
+                    max_completion_tokens=2048,
+                    reasoning_effort="medium",
+                )
+            )
 
-            tools=TOOLS,
+        except Exception as e:
 
-            tool_choice="auto",
+            error = str(e)
 
-            temperature=0.2,
+            print(
+                f"CHAT ERROR: {error}"
+            )
 
-            max_completion_tokens=2048,
+            return {
+                "response": (
+                    "The AI model encountered an error "
+                    "while processing the request."
+                ),
+                "error": error,
+                "conversation_id": conversation_id,
+            }
 
-            reasoning_effort="medium"
-
-        )
+        # ----------------------------------------------------
+        # GET MESSAGE
+        # ----------------------------------------------------
 
         message = (
             response
@@ -946,189 +1726,312 @@ def run_agent(
         )
 
         # ----------------------------------------------------
-        # FINAL RESPONSE
+        # NO TOOL CALL
         # ----------------------------------------------------
 
         if not message.tool_calls:
 
-            return {
-
-                "response":
-                    message.content or "",
-
-                "pending_action":
-                    pending_action
-
-            }
-
-        # ----------------------------------------------------
-        # ADD ASSISTANT TOOL MESSAGE
-        # ----------------------------------------------------
-
-        messages.append(message)
-
-        # ----------------------------------------------------
-        # TOOL CALLS
-        # ----------------------------------------------------
-
-        for tool_call in message.tool_calls:
-
-            tool_name = (
-                tool_call.function.name
+            answer = (
+                message.content
+                or
+                "I completed the request."
             )
-
-            raw_arguments = (
-                tool_call.function.arguments
-                or "{}"
-            )
-
-            try:
-
-                arguments = json.loads(
-                    raw_arguments
-                )
-
-            except Exception:
-
-                arguments = {}
 
             print()
             print(
-                "[AGENT TOOL]",
-                tool_name
+                "[AGENT FINAL RESPONSE]"
             )
-
             print(
-                "[ARGUMENTS]",
-                arguments
+                answer
+            )
+
+            return {
+                "response": answer,
+                "conversation_id": conversation_id,
+            }
+
+        # ----------------------------------------------------
+        # APPEND ASSISTANT TOOL CALL MESSAGE
+        # ----------------------------------------------------
+
+        assistant_message = {
+            "role": "assistant",
+            "content": (
+                message.content
+                or ""
+            ),
+            "tool_calls": []
+        }
+
+        for tool_call in (
+            message.tool_calls
+        ):
+
+            assistant_message[
+                "tool_calls"
+            ].append(
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name":
+                            tool_call.function.name,
+                        "arguments":
+                            tool_call.function.arguments,
+                    },
+                }
+            )
+
+        messages.append(
+            assistant_message
+        )
+
+        # ----------------------------------------------------
+        # EXECUTE TOOL CALLS
+        # ----------------------------------------------------
+
+        for tool_call in (
+            message.tool_calls
+        ):
+
+            tool_name = (
+                tool_call
+                .function
+                .name
+            )
+
+            raw_arguments = (
+                tool_call
+                .function
+                .arguments
+            )
+
+            arguments = parse_tool_arguments(
+                raw_arguments
             )
 
             # ------------------------------------------------
-            # TOOL DOES NOT EXIST
+            # SAFETY CHECK
             # ------------------------------------------------
 
-            function = TOOL_FUNCTIONS.get(
-                tool_name
-            )
+            if tool_name not in TOOL_FUNCTIONS:
 
-            if function is None:
-
-                result = {
-
+                tool_result = {
                     "success": False,
-
-                    "error":
-                        f"Unknown tool: {tool_name}"
-
+                    "error": (
+                        f"Tool '{tool_name}' is not "
+                        "registered."
+                    ),
+                    "available_tools": list(
+                        TOOL_FUNCTIONS.keys()
+                    ),
                 }
 
             else:
 
-                try:
-
-                    result = function(
-                        **arguments
-                    )
-
-                except Exception as e:
-
-                    print(
-                        "[TOOL ERROR]",
-                        str(e)
-                    )
-
-                    result = {
-
-                        "success": False,
-
-                        "error": str(e)
-
-                    }
-
-            print(
-                "[TOOL RESULT]",
-                result
-            )
+                tool_result = execute_tool(
+                    tool_name,
+                    arguments
+                )
 
             # ------------------------------------------------
-            # APPROVAL REQUIRED
+            # PENDING APPROVAL
             # ------------------------------------------------
 
-            if result.get(
-                "requires_approval"
+            if (
+                isinstance(
+                    tool_result,
+                    dict
+                )
+                and
+                tool_result.get(
+                    "approval_required"
+                )
             ):
 
                 return {
-
-                    "response":
-                        "I reached an action that "
-                        "requires your approval.",
-
+                    "response": (
+                        "This action requires your approval "
+                        "before I can continue."
+                    ),
                     "pending_action":
-                        result
-
+                        tool_result,
+                    "conversation_id":
+                        conversation_id,
                 }
 
             # ------------------------------------------------
-            # SEND RESULT TO GROQ
+            # SERIALIZE TOOL RESULT
             # ------------------------------------------------
 
-            messages.append({
+            try:
 
-                "role": "tool",
+                tool_content = json.dumps(
+                    tool_result,
+                    ensure_ascii=False
+                )
 
-                "tool_call_id":
-                    tool_call.id,
+            except Exception:
 
-                "content":
-                    json.dumps(
-                        result,
-                        default=str
-                    )
+                tool_content = str(
+                    tool_result
+                )
 
-            })
+            # ------------------------------------------------
+            # APPEND TOOL RESULT
+            # ------------------------------------------------
 
-    # --------------------------------------------------------
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id":
+                        tool_call.id,
+                    "content":
+                        tool_content,
+                }
+            )
+
+    # ========================================================
     # MAX ITERATIONS
-    # --------------------------------------------------------
+    # ========================================================
+
+    print()
+    print(
+        "[AGENT] Maximum tool iterations reached."
+    )
 
     return {
-
-        "response":
-            "I stopped because the maximum "
-            "number of agent steps was reached.",
-
-        "pending_action":
-            pending_action
-
+        "response": (
+            "I reached the maximum number of browser "
+            "actions for this request. The task may "
+            "require another step."
+        ),
+        "conversation_id": conversation_id,
+        "error": "max_tool_iterations",
     }
 
 
 # ============================================================
-# CLEAN SHUTDOWN
+# SHUTDOWN
 # ============================================================
 
 def shutdown_browser():
+    """
+    Cleanly close Chromium.
+    """
 
     global browser_context
     global playwright_instance
 
     try:
 
-        if browser_context:
+        if browser_context is not None:
 
             browser_context.close()
 
-    finally:
+            browser_context = None
 
-        browser_context = None
+    except Exception:
+        pass
 
     try:
 
-        if playwright_instance:
+        if playwright_instance is not None:
 
             playwright_instance.stop()
 
-    finally:
+            playwright_instance = None
 
-        playwright_instance = None
+    except Exception:
+        pass
+
+
+atexit.register(
+    shutdown_browser
+)
+
+
+# ============================================================
+# DIRECT TEST
+# ============================================================
+
+if __name__ == "__main__":
+
+    print()
+    print("=" * 70)
+    print("PERSONAL AI AGENT")
+    print("=" * 70)
+
+    print(
+        "Browser profile:"
+    )
+
+    print(
+        BROWSER_DATA_DIR
+    )
+
+    print()
+    print(
+        "Type 'exit' to quit."
+    )
+
+    print()
+
+    while True:
+
+        try:
+
+            user_input = input(
+                "You: "
+            ).strip()
+
+        except (
+            KeyboardInterrupt,
+            EOFError
+        ):
+
+            print()
+            break
+
+        if not user_input:
+            continue
+
+        if user_input.lower() in [
+            "exit",
+            "quit"
+        ]:
+            break
+
+        result = run_agent(
+            task=user_input,
+            conversation_history=[]
+        )
+
+        print()
+        print(
+            "Agent:",
+            result.get(
+                "response",
+                ""
+            )
+        )
+
+        if result.get(
+            "pending_action"
+        ):
+
+            print()
+            print(
+                "PENDING ACTION:"
+            )
+
+            print(
+                json.dumps(
+                    result[
+                        "pending_action"
+                    ],
+                    indent=2
+                )
+            )
+
+        print()
