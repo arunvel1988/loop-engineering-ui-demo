@@ -52,3 +52,11 @@ check it again
 
 is it higher than before?
 ###############################################################################
+
+pip install groq playwright
+
+playwright install chromium
+
+playwright install-deps chromium
+
+###############################################################################
