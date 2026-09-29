@@ -1,0 +1,3 @@
+pip install kubernetes ollama
+ollama pull llama3.1
+python3 agent_loop_k8s.py

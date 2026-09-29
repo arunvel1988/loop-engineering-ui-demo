@@ -1,0 +1,859 @@
+####################################################################
+
+nano dummy_email.py
+
+import random
+
+EMAILS = [
+
+    {
+        "id": 1,
+        "from": "clientA@amazon.com",
+        "subject": "URGENT - Production Down",
+        "body": """
+Production API is returning HTTP 500.
+Customers are unable to place orders.
+Please investigate immediately.
+""",
+        "priority": "HIGH"
+    },
+
+    {
+        "id": 2,
+        "from": "boss@company.com",
+        "subject": "Tomorrow's Presentation",
+        "body": """
+Please prepare the Loop Engineering demo.
+Meeting starts at 10 AM.
+""",
+        "priority": "MEDIUM"
+    },
+
+    {
+        "id": 3,
+        "from": "newsletter@tech.com",
+        "subject": "Weekend Offers",
+        "body": """
+Get 50% discount on cloud certifications.
+""",
+        "priority": "LOW"
+    },
+
+    {
+        "id": 4,
+        "from": "clientB@microsoft.com",
+        "subject": "Invoice Approval Required",
+        "body": """
+Kindly approve the invoice today.
+Finance team is waiting.
+""",
+        "priority": "HIGH"
+    },
+
+    {
+        "id": 5,
+        "from": "friend@gmail.com",
+        "subject": "Goa Trip",
+        "body": """
+Weekend Goa trip confirmed.
+""",
+        "priority": "LOW"
+    }
+
+]
+
+
+def get_unread_emails():
+
+    """
+    Simulates Gmail.
+    Every run returns emails.
+    """
+
+    return EMAILS
+
+
+def mark_as_read(email_id):
+
+    print(f"Email {email_id} marked as read.")
+
+#################################################################################
+
+
+nano ollama_client.py
+
+import json
+import requests
+
+OLLAMA_URL = "http://localhost:11434/api/chat"
+
+MODEL = "qwen3:8b"
+
+
+# ============================================================
+# PLANNER PROMPT
+# ============================================================
+
+PLANNER_PROMPT = """
+You are an AI Workflow Planner.
+
+You NEVER solve the user's goal directly.
+
+Your ONLY responsibility is deciding the NEXT action.
+
+Available Actions
+
+READ_EMAILS
+FILTER_EMAILS
+SUMMARIZE
+SEND_SLACK
+DONE
+
+Workflow
+
+If emails are not read
+-> READ_EMAILS
+
+If emails are read but not filtered
+-> FILTER_EMAILS
+
+If emails are filtered but not summarized
+-> SUMMARIZE
+
+If summary exists but not sent
+-> SEND_SLACK
+
+If Slack notification already sent
+-> DONE
+
+Never repeat completed actions.
+
+Always read the Current Context.
+
+Return ONLY valid JSON.
+
+Example
+
+{
+    "thought":"Need unread emails.",
+    "action":"READ_EMAILS"
+}
+
+No markdown.
+
+No explanation.
+
+Only JSON.
+"""
+
+
+# ============================================================
+# ASK PLANNER
+# ============================================================
+
+def ask_planner(goal, context):
+
+    prompt = f"""
+Goal
+
+{goal}
+
+Current Context
+
+{json.dumps(context, indent=2)}
+
+What is the NEXT action?
+"""
+
+    payload = {
+
+        "model": MODEL,
+
+        "messages": [
+
+            {
+                "role": "system",
+                "content": PLANNER_PROMPT
+            },
+
+            {
+                "role": "user",
+                "content": prompt
+            }
+
+        ],
+
+        "stream": False
+
+    }
+
+    response = requests.post(
+
+        OLLAMA_URL,
+
+        json=payload
+
+    )
+
+    response.raise_for_status()
+
+    answer = response.json()["message"]["content"]
+
+    answer = answer.replace("```json", "")
+    answer = answer.replace("```", "")
+    answer = answer.strip()
+
+    return json.loads(answer)
+
+
+# ============================================================
+# SUMMARIZER
+# ============================================================
+
+def summarize_emails(emails):
+
+    prompt = f"""
+You are an expert email assistant.
+
+Summarize the following emails.
+
+Mention
+
+1. Important Emails
+2. Urgent Emails
+3. Action Items
+
+Emails
+
+{json.dumps(emails, indent=2)}
+"""
+
+    payload = {
+
+        "model": MODEL,
+
+        "messages": [
+
+            {
+                "role": "user",
+                "content": prompt
+            }
+
+        ],
+
+        "stream": False
+
+    }
+
+    response = requests.post(
+
+        OLLAMA_URL,
+
+        json=payload
+
+    )
+
+    response.raise_for_status()
+
+    return response.json()["message"]["content"]
+
+  ########################################################################
+
+
+nano agent.py
+
+from dummy_mail import get_unread_emails
+from ollama_client import ask_planner
+from ollama_client import summarize_emails
+
+
+def run_agent(goal):
+
+    context = []
+
+    loops = []
+
+    emails = []
+
+    summary = ""
+
+    while True:
+
+        # Ask the Planner
+        planner = ask_planner(goal, context)
+
+        thought = planner["thought"]
+        action = planner["action"]
+
+        observation = ""
+
+        # --------------------------------------------------
+        # READ EMAILS
+        # --------------------------------------------------
+
+        if action == "READ_EMAILS":
+
+            emails = get_unread_emails()
+
+            observation = f"{len(emails)} unread emails found."
+
+        # --------------------------------------------------
+        # FILTER EMAILS
+        # --------------------------------------------------
+
+        elif action == "FILTER_EMAILS":
+
+            important = []
+
+            for email in emails:
+
+                if email["priority"] in ["HIGH", "MEDIUM"]:
+
+                    important.append(email)
+
+            emails = important
+
+            observation = f"{len(emails)} important emails selected."
+
+        # --------------------------------------------------
+        # SUMMARIZE
+        # --------------------------------------------------
+
+        elif action == "SUMMARIZE":
+
+            summary = summarize_emails(emails)
+
+            observation = "Summary generated successfully."
+
+        # --------------------------------------------------
+        # SEND SLACK
+        # --------------------------------------------------
+
+        elif action == "SEND_SLACK":
+
+            print("\n========== FAKE SLACK ==========\n")
+            print(summary)
+            print("\n===============================\n")
+
+            observation = "Summary sent to Slack."
+
+        # --------------------------------------------------
+        # DONE
+        # --------------------------------------------------
+
+        elif action == "DONE":
+
+            loops.append({
+
+                "thought": thought,
+
+                "action": action,
+
+                "observation": "Workflow Completed"
+
+            })
+
+            break
+
+        else:
+
+            observation = "Unknown Action"
+
+        # --------------------------------------------------
+
+        context.append({
+
+            "action": action,
+
+            "observation": observation
+
+        })
+
+        loops.append({
+
+            "thought": thought,
+
+            "action": action,
+
+            "observation": observation
+
+        })
+
+    return loops
+    ############################################################
+
+    ##############################################################################
+
+nano app.py
+
+from flask import Flask
+from flask import render_template
+from flask import request
+from flask import jsonify
+
+from agent import run_agent
+
+app = Flask(__name__)
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/run", methods=["POST"])
+def run():
+
+    try:
+
+        data = request.get_json()
+
+        task = data.get("task", "")
+
+        if task.strip() == "":
+
+            return jsonify({
+                "success": False,
+                "message": "Task cannot be empty."
+            }), 400
+
+        loops = run_agent(task)
+
+        return jsonify({
+            "success": True,
+            "loops": loops
+        })
+
+    except Exception as e:
+
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+if __name__ == "__main__":
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
+
+    #########################################
+
+    nano index.html
+
+    <!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Loop Engineering Demo</title>
+
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='style.css') }}">
+
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Loop Engineering Demo</h1>
+
+    <p class="subtitle">
+
+        Ollama Planner + Python Loop + Dummy Gmail
+
+    </p>
+
+    <textarea
+            id="task"
+            placeholder="Example:
+
+Summarize today's important emails
+
+or
+
+Summarize unread client emails">
+    </textarea>
+
+    <button onclick="runAgent()">
+
+        Run Agent
+
+    </button>
+
+    <div id="timeline">
+
+    </div>
+
+</div>
+
+<script>
+
+async function runAgent(){
+
+    let task=document.getElementById("task").value;
+
+    if(task.trim()==""){
+
+        alert("Please enter a task.");
+
+        return;
+
+    }
+
+    let timeline=document.getElementById("timeline");
+
+    timeline.innerHTML="<h2>Running Agent...</h2>";
+
+    const response=await fetch("/run",{
+
+        method:"POST",
+
+        headers:{
+
+            "Content-Type":"application/json"
+
+        },
+
+        body:JSON.stringify({
+
+            task:task
+
+        })
+
+    });
+
+    const data=await response.json();
+
+    timeline.innerHTML="";
+
+    if(!data.success){
+
+        timeline.innerHTML="<h2>"+data.message+"</h2>";
+
+        return;
+
+    }
+
+    for(let i=0;i<data.loops.length;i++){
+
+        let loop=data.loops[i];
+
+        let card=document.createElement("div");
+
+        card.className="loop-card";
+
+        card.innerHTML=`
+
+            <div class="loop-title">
+
+                🔄 Loop ${i+1}
+
+            </div>
+
+            <div class="section">
+
+                <b>💭 Thought</b>
+
+                <br><br>
+
+                ${loop.thought}
+
+            </div>
+
+            <div class="section">
+
+                <b>⚙ Action</b>
+
+                <br><br>
+
+                ${loop.action}
+
+            </div>
+
+            <div class="section">
+
+                <b>📄 Observation</b>
+
+                <br><br>
+
+                ${loop.observation}
+
+            </div>
+
+        `;
+
+        timeline.appendChild(card);
+
+        await sleep(1200);
+
+    }
+
+}
+
+function sleep(ms){
+
+    return new Promise(resolve=>setTimeout(resolve,ms));
+
+}
+
+</script>
+
+</body>
+
+</html>
+
+
+############################################################
+
+nano static/style.css
+
+
+*{
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+}
+
+body{
+
+    background:#0f172a;
+
+    font-family:Arial, Helvetica, sans-serif;
+
+    color:white;
+
+}
+
+.container{
+
+    width:1100px;
+
+    margin:40px auto;
+
+}
+
+h1{
+
+    text-align:center;
+
+    color:#38bdf8;
+
+    font-size:42px;
+
+    margin-bottom:10px;
+
+}
+
+.subtitle{
+
+    text-align:center;
+
+    color:#94a3b8;
+
+    margin-bottom:40px;
+
+    font-size:18px;
+
+}
+
+textarea{
+
+    width:100%;
+
+    height:180px;
+
+    background:#1e293b;
+
+    color:white;
+
+    border:1px solid #334155;
+
+    border-radius:10px;
+
+    padding:20px;
+
+    resize:none;
+
+    outline:none;
+
+    font-size:16px;
+
+    line-height:1.5;
+
+}
+
+textarea:focus{
+
+    border:1px solid #38bdf8;
+
+}
+
+button{
+
+    width:100%;
+
+    height:55px;
+
+    margin-top:20px;
+
+    background:#2563eb;
+
+    color:white;
+
+    border:none;
+
+    border-radius:10px;
+
+    font-size:18px;
+
+    cursor:pointer;
+
+    transition:0.3s;
+
+}
+
+button:hover{
+
+    background:#1d4ed8;
+
+}
+
+#timeline{
+
+    margin-top:40px;
+
+}
+
+.loop-card{
+
+    background:#1e293b;
+
+    border-left:6px solid #38bdf8;
+
+    border-radius:10px;
+
+    padding:20px;
+
+    margin-bottom:25px;
+
+    animation:fadeIn .4s ease;
+
+    box-shadow:0 0 15px rgba(0,0,0,.25);
+
+}
+
+.loop-title{
+
+    font-size:22px;
+
+    color:#38bdf8;
+
+    font-weight:bold;
+
+    margin-bottom:20px;
+
+}
+
+.section{
+
+    margin-top:15px;
+
+    background:#0f172a;
+
+    padding:15px;
+
+    border-radius:8px;
+
+    border:1px solid #334155;
+
+    line-height:1.7;
+
+}
+
+.section b{
+
+    color:#38bdf8;
+
+}
+
+.success{
+
+    color:#22c55e;
+
+}
+
+.error{
+
+    color:#ef4444;
+
+}
+
+::-webkit-scrollbar{
+
+    width:10px;
+
+}
+
+::-webkit-scrollbar-track{
+
+    background:#0f172a;
+
+}
+
+::-webkit-scrollbar-thumb{
+
+    background:#334155;
+
+    border-radius:20px;
+
+}
+
+::-webkit-scrollbar-thumb:hover{
+
+    background:#475569;
+
+}
+
+@keyframes fadeIn{
+
+    from{
+
+        opacity:0;
+
+        transform:translateY(25px);
+
+    }
+
+    to{
+
+        opacity:1;
+
+        transform:translateY(0);
+
+    }
+
+}
+
+@media(max-width:1200px){
+
+    .container{
+
+        width:95%;
+
+    }
+
+}
+
+####################################################
+
+python3 app.py
