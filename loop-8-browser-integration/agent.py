@@ -1,215 +1,681 @@
 import json
+import os
+import time
 
 from groq import Groq
-
-from tools import TOOL_FUNCTIONS
-from memory import save_memory, search_memory
-from rag import search_knowledge
+from playwright.sync_api import sync_playwright
 
 
 # ============================================================
-# GROQ CONFIGURATION
+# GROQ
 # ============================================================
 
-client = Groq()
+client = Groq(
+    api_key=os.environ["GROQ_API_KEY"]
+)
 
 MODEL = "openai/gpt-oss-120b"
 
 
 # ============================================================
-# MEMORY CONFIGURATION
+# BROWSER CONFIGURATION
 # ============================================================
 
-# Keep short-term conversation context small.
-#
-# Important because the current Groq tier has an 8000 TPM
-# limitation for GPT-OSS 120B.
-MAX_SHORT_TERM_MESSAGES = 8
+BROWSER_DATA_DIR = os.path.expanduser(
+    "~/.personal-agent-browser"
+)
 
-# Maximum long-term memories retrieved from ChromaDB.
-MAX_LONG_TERM_MEMORIES = 3
-
-# Maximum durable memories created from one interaction.
-MAX_NEW_MEMORIES = 3
-
-# Maximum RAG knowledge chunks retrieved for one request.
-MAX_RAG_RESULTS = 2
-
-# Keep retrieved knowledge compact to protect Groq TPM.
-MAX_RAG_CHUNK_CHARS = 1800
+browser_context = None
+playwright_instance = None
 
 
 # ============================================================
-# TOOLS
+# START HEADLESS BROWSER
+# ============================================================
+
+def start_browser():
+
+    global browser_context
+    global playwright_instance
+
+    if browser_context is not None:
+        return browser_context
+
+    print()
+    print("=" * 70)
+    print("STARTING HEADLESS CHROMIUM")
+    print("=" * 70)
+
+    playwright_instance = sync_playwright().start()
+
+    browser_context = (
+        playwright_instance.chromium
+        .launch_persistent_context(
+
+            user_data_dir=BROWSER_DATA_DIR,
+
+            headless=True,
+
+            viewport={
+                "width": 1440,
+                "height": 900
+            },
+
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu"
+            ]
+        )
+    )
+
+    print("Browser started.")
+    print("Profile:", BROWSER_DATA_DIR)
+
+    return browser_context
+
+
+# ============================================================
+# GET CURRENT PAGE
+# ============================================================
+
+def get_page():
+
+    context = start_browser()
+
+    if len(context.pages) == 0:
+
+        page = context.new_page()
+
+    else:
+
+        page = context.pages[0]
+
+    return page
+
+
+# ============================================================
+# BROWSER OPEN
+# ============================================================
+
+def browser_open(url):
+
+    page = get_page()
+
+    print()
+    print("[BROWSER] Opening:", url)
+
+    page.goto(
+        url,
+        wait_until="domcontentloaded",
+        timeout=60000
+    )
+
+    time.sleep(1)
+
+    return {
+        "success": True,
+        "url": page.url,
+        "title": page.title()
+    }
+
+
+# ============================================================
+# BROWSER READ
+# ============================================================
+
+def browser_read():
+
+    page = get_page()
+
+    print(
+        "[BROWSER] Reading:",
+        page.url
+    )
+
+    try:
+
+        text = page.locator(
+            "body"
+        ).inner_text(
+            timeout=15000
+        )
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+    # Prevent massive pages from consuming Groq context.
+    text = text[:20000]
+
+    return {
+        "success": True,
+        "url": page.url,
+        "title": page.title(),
+        "content": text
+    }
+
+
+# ============================================================
+# BROWSER CLICK
+# ============================================================
+
+def browser_click(selector):
+
+    page = get_page()
+
+    print(
+        "[BROWSER] Clicking:",
+        selector
+    )
+
+    try:
+
+        page.locator(
+            selector
+        ).first.click(
+            timeout=30000
+        )
+
+        time.sleep(1)
+
+        return {
+            "success": True,
+            "url": page.url
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e),
+            "url": page.url
+        }
+
+
+# ============================================================
+# BROWSER TYPE
+# ============================================================
+
+def browser_type(
+    selector,
+    text
+):
+
+    page = get_page()
+
+    print(
+        "[BROWSER] Typing into:",
+        selector
+    )
+
+    try:
+
+        page.locator(
+            selector
+        ).first.fill(
+            text
+        )
+
+        return {
+            "success": True,
+            "selector": selector
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# BROWSER PRESS
+# ============================================================
+
+def browser_press(
+    selector,
+    key
+):
+
+    page = get_page()
+
+    try:
+
+        page.locator(
+            selector
+        ).first.press(
+            key
+        )
+
+        time.sleep(1)
+
+        return {
+            "success": True,
+            "url": page.url
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# BROWSER SCREENSHOT
+# ============================================================
+
+def browser_screenshot():
+
+    page = get_page()
+
+    path = "/tmp/personal-agent-browser.png"
+
+    try:
+
+        page.screenshot(
+            path=path,
+            full_page=True
+        )
+
+        return {
+            "success": True,
+            "path": path,
+            "url": page.url
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# BROWSER BACK
+# ============================================================
+
+def browser_back():
+
+    page = get_page()
+
+    try:
+
+        page.go_back(
+            wait_until="domcontentloaded",
+            timeout=30000
+        )
+
+        return {
+            "success": True,
+            "url": page.url,
+            "title": page.title()
+        }
+
+    except Exception as e:
+
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+# ============================================================
+# HUMAN APPROVAL
+# ============================================================
+
+pending_action = None
+
+
+def request_approval(
+    action,
+    description
+):
+
+    global pending_action
+
+    pending_action = {
+
+        "action": action,
+
+        "description": description,
+
+        "status": "pending"
+
+    }
+
+    print()
+    print("=" * 70)
+    print("HUMAN APPROVAL REQUIRED")
+    print("=" * 70)
+
+    print(
+        json.dumps(
+            pending_action,
+            indent=2
+        )
+    )
+
+    print("=" * 70)
+
+    return {
+
+        "success": False,
+
+        "requires_approval": True,
+
+        "action": action,
+
+        "description": description,
+
+        "message":
+            "Human approval is required before "
+            "this action can continue."
+
+    }
+
+
+# ============================================================
+# TOOL DEFINITIONS
 # ============================================================
 
 TOOLS = [
 
-    # --------------------------------------------------------
-    # SERVER
-    # --------------------------------------------------------
-
     {
         "type": "function",
+
         "function": {
-            "name": "check_server",
-            "description": (
-                "Check current CPU, memory and disk usage "
-                "of the server."
-            ),
+
+            "name": "browser_open",
+
+            "description":
+                "Open a URL in the headless Chromium browser.",
+
             "parameters": {
+
                 "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
 
-    # --------------------------------------------------------
-    # PROCESSES
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "check_processes",
-            "description": (
-                "List the current top processes sorted by "
-                "CPU usage. Use this to identify runaway "
-                "or CPU-intensive processes."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # PORTS
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "check_ports",
-            "description": (
-                "Check current listening network ports "
-                "on the server."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # DOCKER
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "check_docker",
-            "description": (
-                "Check current Docker containers and their "
-                "current state."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {},
-                "required": []
-            }
-        }
-    },
-
-    # --------------------------------------------------------
-    # PREVIOUS INCIDENTS
-    # --------------------------------------------------------
-
-    {
-        "type": "function",
-        "function": {
-            "name": "search_previous_incidents",
-            "description": (
-                "Search previous DevOps incidents stored in "
-                "the incident database. Use this during incident "
-                "investigation to look for similar past incidents, "
-                "previous root causes and previous remediation "
-                "results. Historical incidents are supporting "
-                "evidence only and must never be treated as proof "
-                "of the current root cause."
-            ),
-            "parameters": {
-                "type": "object",
                 "properties": {
 
-                    "alertname": {
+                    "url": {
                         "type": "string",
-                        "description": (
-                            "Alert name such as HighCPU."
-                        )
-                    },
-
-                    "severity": {
-                        "type": "string",
-                        "description": (
-                            "Optional severity such as "
-                            "critical or warning."
-                        )
-                    },
-
-                    "limit": {
-                        "type": "integer",
-                        "description": (
-                            "Maximum number of previous "
-                            "incidents. Keep this small."
-                        )
+                        "description":
+                            "Complete URL to open."
                     }
-                },
-                "required": []
-            }
-        }
-    },
 
-    # --------------------------------------------------------
-    # TERMINATE PROCESS
-    # --------------------------------------------------------
+                },
+
+                "required": ["url"]
+
+            }
+
+        }
+
+    },
 
     {
         "type": "function",
+
         "function": {
-            "name": "terminate_process",
-            "description": (
-                "Request termination of a specific process "
-                "by PID when investigation shows that the "
-                "process is causing the incident. This is a "
-                "remediation proposal. The application intercepts "
-                "this request and requires human approval before "
-                "actually terminating the process."
-            ),
+
+            "name": "browser_read",
+
+            "description":
+                "Read the visible text from the current webpage.",
+
             "parameters": {
+
                 "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
+        }
+
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "browser_click",
+
+            "description":
+                "Click an element on the current webpage "
+                "using a CSS selector.",
+
+            "parameters": {
+
+                "type": "object",
+
                 "properties": {
 
-                    "pid": {
-                        "type": "integer",
-                        "description": (
-                            "PID of the process that should "
-                            "be terminated."
-                        )
+                    "selector": {
+                        "type": "string",
+                        "description":
+                            "CSS selector for the element."
                     }
+
                 },
+
+                "required": ["selector"]
+
+            }
+
+        }
+
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "browser_type",
+
+            "description":
+                "Type text into a webpage input using "
+                "a CSS selector.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {
+
+                    "selector": {
+                        "type": "string"
+                    },
+
+                    "text": {
+                        "type": "string"
+                    }
+
+                },
+
                 "required": [
-                    "pid"
+                    "selector",
+                    "text"
                 ]
+
             }
+
         }
+
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "browser_press",
+
+            "description":
+                "Press a keyboard key on a webpage element.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {
+
+                    "selector": {
+                        "type": "string"
+                    },
+
+                    "key": {
+                        "type": "string",
+                        "description":
+                            "Keyboard key such as Enter, Tab, "
+                            "Escape, ArrowDown."
+                    }
+
+                },
+
+                "required": [
+                    "selector",
+                    "key"
+                ]
+
+            }
+
+        }
+
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "browser_screenshot",
+
+            "description":
+                "Take a screenshot of the current webpage.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
+        }
+
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "browser_back",
+
+            "description":
+                "Navigate the browser back to the previous page.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {},
+
+                "required": []
+
+            }
+
+        }
+
+    },
+
+    {
+        "type": "function",
+
+        "function": {
+
+            "name": "request_approval",
+
+            "description":
+                "Request explicit human approval before "
+                "a financial, booking, purchase, payment, "
+                "email-send, deletion, or other irreversible action.",
+
+            "parameters": {
+
+                "type": "object",
+
+                "properties": {
+
+                    "action": {
+                        "type": "string"
+                    },
+
+                    "description": {
+                        "type": "string"
+                    }
+
+                },
+
+                "required": [
+                    "action",
+                    "description"
+                ]
+
+            }
+
+        }
+
     }
+
 ]
+
+
+# ============================================================
+# TOOL MAP
+# ============================================================
+
+TOOL_FUNCTIONS = {
+
+    "browser_open":
+        browser_open,
+
+    "browser_read":
+        browser_read,
+
+    "browser_click":
+        browser_click,
+
+    "browser_type":
+        browser_type,
+
+    "browser_press":
+        browser_press,
+
+    "browser_screenshot":
+        browser_screenshot,
+
+    "browser_back":
+        browser_back,
+
+    "request_approval":
+        request_approval
+
+}
 
 
 # ============================================================
@@ -217,1243 +683,452 @@ TOOLS = [
 # ============================================================
 
 SYSTEM_PROMPT = """
-You are a professional DevOps incident investigation agent.
 
-Your job is to investigate infrastructure problems using
-REAL information collected from tools.
+You are a personal AI assistant running on the user's
+GCP Ubuntu VM.
 
-You must behave like a production SRE.
+You help the user perform personal computer and web tasks.
 
+============================================================
+CAPABILITIES
+============================================================
 
-===========================================================
-1. CONVERSATION MEMORY
-===========================================================
+You can:
 
-You may receive previous messages from the current conversation.
+- browse websites
+- open URLs
+- read webpages
+- click webpage elements
+- type into webpage fields
+- press keyboard keys
+- navigate backwards
+- take screenshots
+- research travel
+- research railway information
+- navigate websites
 
-Use them when relevant.
+============================================================
+BROWSER
+============================================================
 
-For example:
+The browser is Chromium running HEADLESS on the GCP VM.
 
-User:
-Check CPU.
+You cannot see the browser visually.
 
-Agent:
-CPU is 40%.
+Therefore:
 
-User:
-Check it again.
+1. Open the website.
+2. Read the page.
+3. Use the information returned by browser_read.
+4. Determine the appropriate selector.
+5. Click/type.
+6. Read the page again.
 
-You should understand that "it" refers to CPU.
+Never invent webpage information.
 
-You may compare previous observations with current observations.
+============================================================
+LOGIN
+============================================================
 
-IMPORTANT:
+If a website requires authentication:
 
-Conversation memory represents previous conversation context.
+DO NOT ask the user to provide their password
+to the AI.
 
-It is NOT current infrastructure telemetry.
+Do not store passwords in the agent.
 
-When the user asks about CURRENT infrastructure state,
-always use the appropriate infrastructure tool.
+The user must authenticate using an appropriate
+authentication mechanism.
 
+If authentication cannot be completed because the
+website requires interactive human verification,
+stop and tell the user.
 
-===========================================================
-2. LONG-TERM CONVERSATIONAL MEMORY
-===========================================================
+============================================================
+RAILWAY / TRAVEL
+============================================================
 
-You may receive relevant long-term memories retrieved
-from ChromaDB.
+You may search for railway/travel options.
 
-These memories represent durable information learned
-from previous conversations.
+You may navigate through the booking process
+to the point immediately before final purchase/payment.
 
-Examples:
+You MUST NOT automatically complete:
 
-- application names
-- project information
-- architecture information
-- infrastructure conventions
-- persistent configuration
-- stable user preferences
-- recurring operational preferences
+- payment
+- final ticket purchase
+- irreversible booking
 
-Use long-term memories when they are relevant.
+Before such an action:
 
-IMPORTANT:
+CALL request_approval.
 
-Long-term conversational memory is NOT live infrastructure
-telemetry.
+============================================================
+SENSITIVE ACTIONS
+============================================================
 
-For example, if memory says:
+Human approval is REQUIRED before:
 
-"The user's application is called ecommerce-app."
+- buying anything
+- booking a ticket
+- making payment
+- sending an email
+- deleting data
+- submitting an irreversible form
+- changing important account settings
 
-that should be used when the user asks:
+Do NOT execute these actions automatically.
 
-"What is my application called?"
+============================================================
+READ VS ACTION
+============================================================
 
-However, if the user asks:
-
-"What containers are currently running?"
-
-you MUST use the Docker tool.
-
-Do not confuse an application name with:
-
-- Docker Compose project name
-- container name
-- service name
-- hostname
-- infrastructure resource name
-
-These can be different things.
-
-
-===========================================================
-3. MEMORY QUESTIONS VS CURRENT STATE QUESTIONS
-===========================================================
-
-This distinction is VERY IMPORTANT.
-
-If the user asks about something previously told to the
-agent, use long-term memory.
-
-Examples:
-
-"What is my application called?"
-
-"What application do I use?"
-
-"What database did I tell you I use?"
-
-"What architecture did I tell you about?"
-
-"What are my DevOps preferences?"
-
-"What container name did I tell you earlier?"
-
-For these questions, do NOT automatically call infrastructure
-tools.
-
-Use the relevant long-term memory.
-
-However, if the user asks about CURRENT infrastructure:
-
-"What containers are running now?"
-
-"What is the CPU right now?"
-
-"What ports are open now?"
-
-"Is Docker running now?"
-
-"What is the current memory usage?"
-
-then call the appropriate live infrastructure tool.
-
-NEVER replace a memory answer with unrelated live telemetry.
-
-For example:
-
-If long-term memory says:
-
-"The user's application is called ecommerce-app."
-
-and Docker reports:
-
-"Compose project = monitoring"
-
-then:
-
-"What is my application called?"
-
-must be answered:
-
-"ecommerce-app"
-
-It must NOT be answered:
-
-"monitoring"
-
-because monitoring is the Docker Compose project name,
-not necessarily the application name.
-
-
-===========================================================
-4. RAG / DEVOPS KNOWLEDGE
-===========================================================
-
-You may receive relevant knowledge retrieved from the DevOps
-knowledge base. The knowledge base contains PDF documentation
-about Docker, Linux and DevOps troubleshooting.
-
-Use this knowledge as GENERAL OPERATIONAL GUIDANCE.
-
-IMPORTANT:
-
-RAG knowledge is documentation. It is NOT live infrastructure
-telemetry.
-
-For example, if the retrieved knowledge says:
-
-"Use ps aux --sort=-%cpu to find CPU-intensive processes."
-
-and the user asks:
-
-"Which process is using the most CPU right now?"
-
-you MUST call check_processes because the actual answer requires
-current server information.
-
-If the user asks:
-
-"How do I investigate high CPU on Linux?"
-
-use the retrieved Linux knowledge to explain the procedure.
-
-When RAG knowledge and current tool output are both available:
-
-- Use RAG for procedures, concepts and troubleshooting guidance.
-- Use live tools for current infrastructure facts.
-- Never invent live values from documentation.
-- Never treat documentation as proof of the current root cause.
-- If live telemetry conflicts with documentation, trust the live
-  telemetry for the current incident.
-
-The retrieved knowledge may also help you decide which
-infrastructure tool should be called next.
-
-
-===========================================================
-5. CURRENT TELEMETRY
-===========================================================
-
-Use current infrastructure tools to collect real data.
+These normally do not require approval:
+
+- opening websites
+- searching
+- reading webpages
+- comparing prices
+- reading public information
+
+These require approval:
+
+- purchase
+- booking
+- payment
+- send
+- delete
+- irreversible submission
+
+============================================================
+BROWSER LOOP
+============================================================
+
+For browser tasks use:
+
+OPEN
+  ↓
+READ
+  ↓
+DECIDE
+  ↓
+CLICK / TYPE
+  ↓
+READ AGAIN
+  ↓
+DECIDE
+  ↓
+repeat
+
+Stop when the user's task is complete.
+
+============================================================
+IMPORTANT
+============================================================
 
 Never invent:
 
-- CPU values
-- memory values
-- disk values
-- process names
-- process IDs
-- ports
-- Docker containers
-- service states
-- infrastructure status
+- prices
+- train names
+- train times
+- availability
+- account information
+- webpage contents
+- confirmation numbers
+
+Use browser tools to obtain current information.
 
-
-If the user asks:
-
-"What is CPU now?"
-
-call:
-
-check_server
-
-Do not answer using an old conversation value.
-
-If the user asks:
-
-"What processes are using CPU now?"
-
-call:
-
-check_processes
-
-If the user asks:
-
-"What containers are running now?"
-
-call:
-
-check_docker
-
-If the user asks:
-
-"What ports are listening now?"
-
-call:
-
-check_ports
-
-
-===========================================================
-6. INVESTIGATION WORKFLOW
-===========================================================
-
-For infrastructure incidents:
-
-1. CHECK INCIDENT HISTORY WHEN RELEVANT
-2. OBSERVE CURRENT INFRASTRUCTURE
-3. INVESTIGATE
-4. CORRELATE EVIDENCE
-5. IDENTIFY ROOT CAUSE
-6. RECOMMEND REMEDIATION
-7. VERIFY
-
-
-===========================================================
-7. AVAILABLE TOOLS
-===========================================================
-
-Current infrastructure:
-
-- check_server
-- check_processes
-- check_ports
-- check_docker
-
-Historical operational memory:
-
-- search_previous_incidents
-
-Remediation:
-
-- terminate_process
-
-
-===========================================================
-8. CPU INCIDENT
-===========================================================
-
-If server CPU is significantly elevated and a process is
-using approximately 100% CPU, investigate whether that
-process correlates with the elevated CPU usage.
-
-Only request termination when CURRENT evidence supports it.
-
-Never use historical incidents as proof of the current
-root cause.
-
-
-===========================================================
-9. HISTORICAL INCIDENT MEMORY
-===========================================================
-
-Previous incidents are historical operational evidence.
-
-Use search_previous_incidents when relevant.
-
-Historical incidents are supporting evidence only.
-
-They must NEVER be treated as proof of the current root cause.
-
-If historical evidence conflicts with current telemetry,
-trust current telemetry.
-
-
-===========================================================
-10. ROOT CAUSE
-===========================================================
-
-Only identify a root cause when evidence supports it.
-
-If evidence is insufficient, say:
-
-"Root cause could not be conclusively identified from the
-available telemetry."
-
-
-===========================================================
-11. REMEDIATION
-===========================================================
-
-terminate_process is destructive.
-
-NEVER execute destructive remediation automatically.
-
-When strong CURRENT evidence shows that a specific process
-is causing the incident:
-
-1. Explain the evidence.
-2. Identify the exact PID from CURRENT telemetry.
-3. Call terminate_process with that PID.
-
-The application intercepts the call and requires human approval.
-
-Never terminate PID 1.
-
-Never invent a PID.
-
-
-===========================================================
-12. LONG-TERM MEMORY SAFETY
-===========================================================
-
-Not every conversation message should become memory.
-
-Only remember durable and useful information.
-
-Good memories:
-
-- application names
-- project names
-- architecture
-- persistent configuration
-- infrastructure conventions
-- stable preferences
-- recurring operational preferences
-
-Do NOT remember:
-
-- greetings
-- temporary CPU values
-- temporary memory values
-- temporary disk values
-- temporary process IDs
-- one-time investigation results
-- casual conversation
-- passwords
-- API keys
-- secrets
-- access tokens
-
-
-===========================================================
-13. RESPONSE FORMAT
-===========================================================
-
-For infrastructure investigations use:
-
-Investigation Summary
-
-Root Cause
-
-Evidence
-
-Historical Evidence
-
-Recommended Remediation
-
-Risk Assessment
-
-Action Required
-
-For normal conversation, answer naturally.
-
-Keep responses concise and evidence-based.
 """
 
 
 # ============================================================
-# LONG-TERM MEMORY SEARCH
-# ============================================================
-
-def get_long_term_memory(task):
-    """
-    Search ChromaDB for memories relevant to the user's
-    current request.
-    """
-
-    try:
-
-        memories = search_memory(
-            query=task,
-            limit=MAX_LONG_TERM_MEMORIES
-        )
-
-        if not memories:
-            return []
-
-        return memories
-
-    except Exception as e:
-
-        print(
-            f"[MEMORY] Long-term memory search failed: {e}"
-        )
-
-        return []
-
-
-# ============================================================
-# BUILD MEMORY CONTEXT
-# ============================================================
-
-def build_memory_context(memories):
-    """
-    Convert ChromaDB search results into a compact
-    context block for GPT-OSS.
-    """
-
-    if not memories:
-        return ""
-
-    lines = [
-        "===========================================================",
-        "RELEVANT LONG-TERM MEMORY",
-        "===========================================================",
-        "",
-        "These are memories retrieved from previous conversations.",
-        "Use them only when relevant to the user's question.",
-        "",
-    ]
-
-    for index, item in enumerate(
-        memories,
-        start=1
-    ):
-
-        memory = item.get(
-            "memory",
-            ""
-        )
-
-        if not memory:
-            continue
-
-        # Keep memory small to protect Groq TPM.
-        if len(memory) > 1000:
-            memory = (
-                memory[:1000]
-                + "..."
-            )
-
-        lines.append(
-            f"{index}. {memory}"
-        )
-
-    lines.append("")
-
-    return "\n".join(lines)
-
-
-# ============================================================
-# EXTRACT DURABLE MEMORIES
-# ============================================================
-
-def extract_memories(
-    task,
-    response
-):
-    """
-    Ask GPT-OSS to identify durable information worth
-    storing in ChromaDB.
-
-    This is NOT a tool call.
-    """
-
-    if not response:
-        return []
-
-    memory_prompt = f"""
-You are a long-term memory extraction system.
-
-Read the interaction below and identify only information
-that is likely to remain useful in future conversations.
-
-Good examples:
-
-- application names
-- project names
-- architecture
-- infrastructure configuration
-- persistent preferences
-- stable DevOps conventions
-- recurring operational preferences
-
-Do NOT save:
-
-- greetings
-- temporary CPU values
-- temporary memory values
-- temporary disk values
-- temporary process IDs
-- one-time incident results
-- temporary infrastructure state
-- casual conversation
-- passwords
-- API keys
-- secrets
-- access tokens
-
-IMPORTANT:
-
-Do not reinterpret or invent information.
-
-Only extract facts explicitly supported by the interaction.
-
-Return ONLY valid JSON.
-
-Exact format:
-
-{{
-  "memories": [
-    "memory 1",
-    "memory 2"
-  ]
-}}
-
-If nothing is worth remembering:
-
-{{
-  "memories": []
-}}
-
-USER MESSAGE:
-{task}
-
-AGENT RESPONSE:
-{response}
-"""
-
-    try:
-
-        result = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You extract durable long-term "
-                        "memories. Return only JSON."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": memory_prompt
-                }
-            ],
-            temperature=0,
-            max_completion_tokens=300,
-            reasoning_effort="low"
-        )
-
-        content = (
-            result
-            .choices[0]
-            .message
-            .content
-            or ""
-        )
-
-        content = content.strip()
-
-
-        # ----------------------------------------------------
-        # Parse normal JSON
-        # ----------------------------------------------------
-
-        try:
-
-            data = json.loads(
-                content
-            )
-
-        except json.JSONDecodeError:
-
-            # ------------------------------------------------
-            # Handle markdown JSON
-            # ------------------------------------------------
-
-            if content.startswith(
-                "```"
-            ):
-
-                content = content.replace(
-                    "```json",
-                    ""
-                )
-
-                content = content.replace(
-                    "```",
-                    ""
-                )
-
-                content = content.strip()
-
-            try:
-
-                data = json.loads(
-                    content
-                )
-
-            except json.JSONDecodeError:
-
-                print(
-                    "[MEMORY] Could not parse memory JSON."
-                )
-
-                return []
-
-
-        memories = data.get(
-            "memories",
-            []
-        )
-
-        if not isinstance(
-            memories,
-            list
-        ):
-            return []
-
-
-        cleaned = []
-
-        for memory in memories:
-
-            if not isinstance(
-                memory,
-                str
-            ):
-                continue
-
-            memory = memory.strip()
-
-            if not memory:
-                continue
-
-            if len(memory) > 1000:
-
-                memory = memory[:1000]
-
-
-            cleaned.append(
-                memory
-            )
-
-            if len(cleaned) >= MAX_NEW_MEMORIES:
-                break
-
-
-        return cleaned
-
-
-    except Exception as e:
-
-        print(
-            f"[MEMORY] Memory extraction failed: {e}"
-        )
-
-        return []
-
-
-# ============================================================
-# SAVE LONG-TERM MEMORIES
-# ============================================================
-
-def store_long_term_memories(
-    conversation_id,
-    task,
-    response
-):
-    """
-    Extract durable memories from the interaction and
-    store them in ChromaDB.
-    """
-
-    if not response:
-        return
-
-
-    memories = extract_memories(
-        task,
-        response
-    )
-
-
-    if not memories:
-        return
-
-
-    for memory in memories:
-
-        try:
-
-            save_memory(
-                conversation_id=(
-                    conversation_id
-                    or "unknown"
-                ),
-                memory=memory,
-                memory_type="conversation"
-            )
-
-            print(
-                f"[MEMORY] Saved: {memory}"
-            )
-
-        except Exception as e:
-
-            print(
-                f"[MEMORY] Failed to save memory: {e}"
-            )
-
-
-# ============================================================
-# RAG KNOWLEDGE SEARCH
-# ============================================================
-
-def get_rag_knowledge(task):
-    """
-    Search the DevOps knowledge base for documentation relevant
-    to the current request.
-
-    This retrieves knowledge from the PDF documents ingested into
-    ChromaDB by rag_ingest.py.
-
-    RAG provides documentation and troubleshooting guidance.
-    It does NOT provide live infrastructure state.
-    """
-
-    try:
-
-        results = search_knowledge(
-            query=task,
-            limit=MAX_RAG_RESULTS
-        )
-
-        if not results:
-            return []
-
-        return results
-
-    except Exception as e:
-
-        print(
-            f"[RAG] Knowledge search failed: {e}"
-        )
-
-        return []
-
-
-# ============================================================
-# BUILD RAG CONTEXT
-# ============================================================
-
-def build_rag_context(results):
-    """
-    Convert retrieved ChromaDB results into a compact context
-    block for GPT-OSS.
-    """
-
-    if not results:
-        return ""
-
-    lines = [
-        "===========================================================",
-        "RELEVANT DEVOPS KNOWLEDGE (RAG)",
-        "===========================================================",
-        "",
-        "The following information was retrieved from the DevOps",
-        "knowledge base PDFs.",
-        "",
-        "Use it as documentation and troubleshooting guidance.",
-        "Do not treat it as live infrastructure telemetry.",
-        "",
-    ]
-
-    for index, item in enumerate(
-        results,
-        start=1
-    ):
-
-        content = item.get(
-            "content",
-            ""
-        )
-
-        if not content:
-            continue
-
-        if len(content) > MAX_RAG_CHUNK_CHARS:
-            content = (
-                content[:MAX_RAG_CHUNK_CHARS]
-                + "..."
-            )
-
-        source = item.get(
-            "source",
-            "unknown"
-        )
-
-        page = item.get(
-            "page",
-            "unknown"
-        )
-
-        distance = item.get(
-            "distance"
-        )
-
-        if isinstance(distance, (int, float)):
-            distance_text = f"{distance:.4f}"
-        else:
-            distance_text = "unknown"
-
-        lines.append(
-            f"SOURCE {index}: {source}, page {page}, "
-            f"distance {distance_text}"
-        )
-        lines.append("")
-        lines.append(content)
-        lines.append("")
-
-    return "\\n".join(lines)
-
-
-# ============================================================
-# MAIN AGENT
+# RUN AGENT
 # ============================================================
 
 def run_agent(
     task,
     conversation_history=None,
-    conversation_id=None
+    conversation_id=None,
+    **kwargs
 ):
-    """
-    Run GPT-OSS 120B with:
 
-    - short-term conversation memory
-    - long-term ChromaDB memory
-    - RAG knowledge from PDF documents
-    - DevOps tools
-    - human-approved remediation
-    """
+    global pending_action
+
+    pending_action = None
 
     messages = [
+
         {
             "role": "system",
             "content": SYSTEM_PROMPT
         }
+
     ]
 
-
-    # ========================================================
-    # LONG-TERM MEMORY
-    # ========================================================
-
-    long_term_memories = get_long_term_memory(
-        task
-    )
-
-    memory_context = build_memory_context(
-        long_term_memories
-    )
-
-    if memory_context:
-
-        messages.append(
-            {
-                "role": "system",
-                "content": memory_context
-            }
-        )
-
-
-    # ========================================================
-    # RAG KNOWLEDGE
-    # ========================================================
-
-    rag_results = get_rag_knowledge(
-        task
-    )
-
-    rag_context = build_rag_context(
-        rag_results
-    )
-
-    if rag_context:
-
-        messages.append(
-            {
-                "role": "system",
-                "content": rag_context
-            }
-        )
-
-
-    # ========================================================
-    # SHORT-TERM MEMORY
-    # ========================================================
+    # --------------------------------------------------------
+    # EXISTING FLASK CHAT HISTORY
+    # --------------------------------------------------------
 
     if conversation_history:
 
-        recent_history = conversation_history[
-            -MAX_SHORT_TERM_MESSAGES:
-        ]
+        for item in conversation_history:
 
-        for item in recent_history:
+            if not isinstance(
+                item,
+                dict
+            ):
+                continue
 
-            role = item.get(
-                "role"
-            )
+            role = item.get("role")
 
             content = item.get(
-                "content",
-                ""
+                "content"
             )
 
-            if role not in [
-                "user",
-                "assistant"
-            ]:
-                continue
+            if role and content:
 
-            if not content:
-                continue
+                messages.append({
 
-            # Protect Groq TPM.
-            if len(content) > 3000:
-
-                content = (
-                    content[:3000]
-                    + "..."
-                )
-
-            messages.append(
-                {
                     "role": role,
+
                     "content": content
-                }
-            )
 
+                })
 
-    # ========================================================
+    # --------------------------------------------------------
     # CURRENT REQUEST
-    # ========================================================
+    # --------------------------------------------------------
 
-    messages.append(
-        {
-            "role": "user",
-            "content": task
-        }
-    )
+    messages.append({
 
+        "role": "user",
 
-    pending_action = None
+        "content": task
 
+    })
 
-    # ========================================================
-    # AGENT TOOL LOOP
-    # ========================================================
+    # --------------------------------------------------------
+    # ORCHESTRATION LOOP
+    # --------------------------------------------------------
 
-    while True:
+    for iteration in range(20):
+
+        print()
+        print("=" * 70)
+        print(
+            "AGENT ITERATION:",
+            iteration + 1
+        )
+        print("=" * 70)
 
         response = client.chat.completions.create(
+
             model=MODEL,
+
             messages=messages,
+
             tools=TOOLS,
+
             tool_choice="auto",
+
             temperature=0.2,
+
             max_completion_tokens=2048,
+
             reasoning_effort="medium"
+
         )
 
+        message = (
+            response
+            .choices[0]
+            .message
+        )
 
-        message = response.choices[0].message
-
-
-        # ====================================================
-        # NO TOOL CALL
-        # ====================================================
+        # ----------------------------------------------------
+        # FINAL RESPONSE
+        # ----------------------------------------------------
 
         if not message.tool_calls:
 
-            final_response = (
-                message.content
-                or ""
-            )
-
-
-            # =================================================
-            # SAVE LONG-TERM MEMORY
-            # =================================================
-
-            try:
-
-                store_long_term_memories(
-                    conversation_id=conversation_id,
-                    task=task,
-                    response=final_response
-                )
-
-            except Exception as e:
-
-                print(
-                    f"[MEMORY] Error storing memory: {e}"
-                )
-
-
             return {
-                "response": final_response,
-                "pending_action": pending_action
+
+                "response":
+                    message.content or "",
+
+                "pending_action":
+                    pending_action
+
             }
 
+        # ----------------------------------------------------
+        # ADD ASSISTANT TOOL MESSAGE
+        # ----------------------------------------------------
 
-        # ====================================================
-        # ADD ASSISTANT TOOL CALL
-        # ====================================================
+        messages.append(message)
 
-        messages.append(
-            message
-        )
-
-
-        # ====================================================
-        # PROCESS TOOL CALLS
-        # ====================================================
+        # ----------------------------------------------------
+        # TOOL CALLS
+        # ----------------------------------------------------
 
         for tool_call in message.tool_calls:
 
             tool_name = (
-                tool_call
-                .function
-                .name
+                tool_call.function.name
             )
 
-
-            # ------------------------------------------------
-            # Parse tool arguments
-            # ------------------------------------------------
+            raw_arguments = (
+                tool_call.function.arguments
+                or "{}"
+            )
 
             try:
 
                 arguments = json.loads(
-                    tool_call
-                    .function
-                    .arguments
+                    raw_arguments
                 )
 
-            except json.JSONDecodeError:
+            except Exception:
 
                 arguments = {}
 
+            print()
+            print(
+                "[AGENT TOOL]",
+                tool_name
+            )
 
-            # =================================================
-            # DESTRUCTIVE REMEDIATION
-            # =================================================
+            print(
+                "[ARGUMENTS]",
+                arguments
+            )
 
-            if tool_name == "terminate_process":
+            # ------------------------------------------------
+            # TOOL DOES NOT EXIST
+            # ------------------------------------------------
 
-                pid = arguments.get(
-                    "pid"
-                )
+            function = TOOL_FUNCTIONS.get(
+                tool_name
+            )
 
+            if function is None:
 
-                if pid is None:
+                result = {
 
-                    result = {
-                        "success": False,
-                        "requires_approval": False,
-                        "error": "No PID was provided."
-                    }
+                    "success": False,
 
+                    "error":
+                        f"Unknown tool: {tool_name}"
 
-                else:
-
-                    try:
-
-                        pid = int(
-                            pid
-                        )
-
-                    except (
-                        ValueError,
-                        TypeError
-                    ):
-
-                        result = {
-                            "success": False,
-                            "requires_approval": False,
-                            "error": "Invalid PID."
-                        }
-
-
-                    else:
-
-                        # ------------------------------------
-                        # Never terminate PID 1
-                        # ------------------------------------
-
-                        if pid == 1:
-
-                            result = {
-                                "success": False,
-                                "requires_approval": False,
-                                "error": (
-                                    "PID 1 cannot be terminated."
-                                )
-                            }
-
-
-                        else:
-
-                            pending_action = {
-                                "tool": (
-                                    "terminate_process"
-                                ),
-                                "arguments": {
-                                    "pid": pid
-                                },
-                                "description": (
-                                    f"Terminate process PID {pid}"
-                                )
-                            }
-
-
-                            result = {
-                                "success": False,
-                                "requires_approval": True,
-                                "pid": pid,
-                                "message": (
-                                    f"Termination of PID {pid} "
-                                    "requires human approval."
-                                )
-                            }
-
-
-            # =================================================
-            # READ-ONLY TOOL
-            # =================================================
+                }
 
             else:
 
-                function = TOOL_FUNCTIONS.get(
-                    tool_name
-                )
+                try:
 
+                    result = function(
+                        **arguments
+                    )
 
-                if not function:
+                except Exception as e:
+
+                    print(
+                        "[TOOL ERROR]",
+                        str(e)
+                    )
 
                     result = {
+
                         "success": False,
-                        "error": (
-                            f"Unknown tool: {tool_name}"
-                        )
+
+                        "error": str(e)
+
                     }
 
+            print(
+                "[TOOL RESULT]",
+                result
+            )
 
-                else:
+            # ------------------------------------------------
+            # APPROVAL REQUIRED
+            # ------------------------------------------------
 
-                    try:
+            if result.get(
+                "requires_approval"
+            ):
 
-                        result = function(
-                            **arguments
-                        )
+                return {
 
-                    except Exception as e:
+                    "response":
+                        "I reached an action that "
+                        "requires your approval.",
 
-                        result = {
-                            "success": False,
-                            "error": str(e)
-                        }
+                    "pending_action":
+                        result
 
+                }
 
-            # =================================================
-            # SEND TOOL RESULT BACK TO GPT
-            # =================================================
+            # ------------------------------------------------
+            # SEND RESULT TO GROQ
+            # ------------------------------------------------
 
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": json.dumps(
+            messages.append({
+
+                "role": "tool",
+
+                "tool_call_id":
+                    tool_call.id,
+
+                "content":
+                    json.dumps(
                         result,
                         default=str
                     )
-                }
-            )
+
+            })
+
+    # --------------------------------------------------------
+    # MAX ITERATIONS
+    # --------------------------------------------------------
+
+    return {
+
+        "response":
+            "I stopped because the maximum "
+            "number of agent steps was reached.",
+
+        "pending_action":
+            pending_action
+
+    }
+
+
+# ============================================================
+# CLEAN SHUTDOWN
+# ============================================================
+
+def shutdown_browser():
+
+    global browser_context
+    global playwright_instance
+
+    try:
+
+        if browser_context:
+
+            browser_context.close()
+
+    finally:
+
+        browser_context = None
+
+    try:
+
+        if playwright_instance:
+
+            playwright_instance.stop()
+
+    finally:
+
+        playwright_instance = None
