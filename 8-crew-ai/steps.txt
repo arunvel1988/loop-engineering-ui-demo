@@ -1,0 +1,17 @@
+
+sudo apt update
+sudo apt install -y python3-venv python3-pip
+
+mkdir -p ~/crewai-devops
+cd ~/crewai-devops
+
+python3 -m venv venv
+source venv/bin/activate
+
+pip install -U crewai litellm
+
+crewai version
+
+crewai create crew devops_crew
+
+export GROQ_API_KEY=""
