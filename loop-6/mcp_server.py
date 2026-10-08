@@ -572,11 +572,11 @@ if __name__ == "__main__":
     print("DevOps MCP Server")
     print("=" * 60)
     print("Transport : Streamable HTTP")
-    print("Endpoint  : http://0.0.0.0:8000/mcp")
+    print("Endpoint  : http://0.0.0.0:8080/mcp")
     print("=" * 60)
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=8080,
     )
