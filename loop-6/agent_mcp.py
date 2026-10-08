@@ -42,9 +42,8 @@ MAX_RAG_CHUNK_CHARS = 1800
 # MCP CONFIGURATION
 # ============================================================
 
-#MCP_SERVER_URL = "http://127.0.0.1:8000/mcp"
-MCP_SERVER_URL = "https://145e2b94c11804f1-1-8000.spca.r.killercoda.com/mcp"
-#https://145e2b94c11804f1-1-8000.spca.r.killercoda.com/
+MCP_SERVER_URL = "http://127.0.0.1:8000/mcp"
+
 
 import asyncio
 import threading
