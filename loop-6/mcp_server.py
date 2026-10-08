@@ -2,7 +2,6 @@ import os
 import re
 import signal
 import subprocess
-
 import psutil
 import docker
 
@@ -185,6 +184,7 @@ def terminate_process(pid: int) -> dict:
 
     try:
         process.wait(timeout=5)
+
         return {
             "success": True,
             "action": "terminate",
@@ -561,14 +561,22 @@ def remove_container(
 # SERVER START
 # ---------------------------------------------------------
 
+app = mcp.streamable_http_app()
+
+
 if __name__ == "__main__":
+
+    import uvicorn
+
     print("=" * 60)
     print("DevOps MCP Server")
     print("=" * 60)
     print("Transport : Streamable HTTP")
-    print("Endpoint  : http://0.0.0.0:8080/mcp")
+    print("Endpoint  : http://0.0.0.0:8000/mcp")
     print("=" * 60)
 
-    mcp.run(
-        transport="streamable-http"
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
     )
