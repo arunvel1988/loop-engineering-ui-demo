@@ -35,7 +35,7 @@ echo "==========================================="
 echo "Installing Python Packages..."
 echo "==========================================="
 
-pip install flask requests groq
+pip install flask requests groq psutil 
 
 echo ""
 echo "==========================================="
