@@ -53,15 +53,18 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 
-_MCP_SESSION = None
-_MCP_STREAM_CONTEXT = None
-_MCP_CLIENT_CONTEXT = None
 _MCP_LOCK = threading.Lock()
 _MCP_TOOLS = []
 
 
 def _run_async(coro):
-    """Run an async MCP coroutine from synchronous Flask code."""
+    """
+    Run an async MCP coroutine safely from synchronous Flask code.
+
+    If there is already a running event loop in the current thread,
+    execute the coroutine in a separate thread with its own event loop.
+    Otherwise, use asyncio.run() directly.
+    """
     try:
         asyncio.get_running_loop()
     except RuntimeError:
@@ -76,7 +79,10 @@ def _run_async(coro):
         except Exception as exc:
             error["value"] = exc
 
-    thread = threading.Thread(target=runner, daemon=True)
+    thread = threading.Thread(
+        target=runner,
+        daemon=True,
+    )
     thread.start()
     thread.join()
 
@@ -86,154 +92,197 @@ def _run_async(coro):
     return result.get("value")
 
 
-async def _mcp_connect_async():
-    """Create and initialize one MCP Streamable HTTP session."""
-    global _MCP_SESSION
-    global _MCP_STREAM_CONTEXT
-    global _MCP_CLIENT_CONTEXT
+# ============================================================
+# MCP CONNECTION
+# ============================================================
 
-    if _MCP_SESSION is not None:
-        return _MCP_SESSION
+async def _mcp_with_session_async(operation):
+    """
+    Create an MCP Streamable HTTP connection, initialize the session,
+    execute one operation, and close everything in the same event loop.
 
-    _MCP_STREAM_CONTEXT = streamablehttp_client(
+    This prevents an async MCP session from being reused across
+    different asyncio event loops.
+    """
+
+    async with streamablehttp_client(
         MCP_SERVER_URL
-    )
+    ) as streams:
 
-    read_stream, write_stream, _ = (
-        await _MCP_STREAM_CONTEXT.__aenter__()
-    )
+        read_stream, write_stream, _ = streams
 
-    _MCP_CLIENT_CONTEXT = ClientSession(
-        read_stream,
-        write_stream,
-    )
+        async with ClientSession(
+            read_stream,
+            write_stream,
+        ) as session:
 
-    await _MCP_CLIENT_CONTEXT.__aenter__()
-    await _MCP_CLIENT_CONTEXT.initialize()
+            await session.initialize()
 
-    _MCP_SESSION = _MCP_CLIENT_CONTEXT
-
-    return _MCP_SESSION
+            return await operation(session)
 
 
-async def _mcp_disconnect_async():
-    """Close the MCP connection and reset its state."""
-    global _MCP_SESSION
-    global _MCP_STREAM_CONTEXT
-    global _MCP_CLIENT_CONTEXT
-
-    try:
-        if _MCP_CLIENT_CONTEXT is not None:
-            await _MCP_CLIENT_CONTEXT.__aexit__(
-                None, None, None
-            )
-    finally:
-        try:
-            if _MCP_STREAM_CONTEXT is not None:
-                await _MCP_STREAM_CONTEXT.__aexit__(
-                    None, None, None
-                )
-        finally:
-            _MCP_SESSION = None
-            _MCP_STREAM_CONTEXT = None
-            _MCP_CLIENT_CONTEXT = None
-
+# ============================================================
+# MCP TOOL DISCOVERY
+# ============================================================
 
 async def _discover_mcp_tools_async():
-    """Discover MCP tools and convert them to Groq schemas."""
-    session = await _mcp_connect_async()
-    response = await session.list_tools()
+    """
+    Discover tools from the external MCP server.
+    """
 
-    tools = []
+    async def operation(session):
+        response = await session.list_tools()
 
-    for tool in response.tools:
-        schema = getattr(tool, "inputSchema", None)
+        tools = []
 
-        if schema is None:
-            schema = {
-                "type": "object",
-                "properties": {},
-                "required": [],
-            }
+        for tool in response.tools:
 
-        tools.append({
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": (
-                    tool.description
-                    or f"MCP tool: {tool.name}"
-                ),
-                "parameters": schema,
-            },
-        })
+            schema = getattr(
+                tool,
+                "inputSchema",
+                None,
+            )
 
-    return tools
+            if schema is None:
+                schema = {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                }
+
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": (
+                        tool.description
+                        or f"MCP tool: {tool.name}"
+                    ),
+                    "parameters": schema,
+                },
+            })
+
+        return tools
+
+    return await _mcp_with_session_async(
+        operation
+    )
 
 
 def get_mcp_tools():
-    """Discover tools from the external MCP server."""
+    """
+    Discover tools from the external MCP server.
+    """
+
     global _MCP_TOOLS
 
     with _MCP_LOCK:
         try:
+
             _MCP_TOOLS = _run_async(
                 _discover_mcp_tools_async()
             )
 
             print(
-                f"[MCP] Discovered {len(_MCP_TOOLS)} tools."
+                f"[MCP] Discovered "
+                f"{len(_MCP_TOOLS)} tools."
             )
 
             return _MCP_TOOLS
 
         except Exception:
-            print("[MCP] Tool discovery failed:")
+
+            print(
+                "[MCP] Tool discovery failed:"
+            )
+
             traceback.print_exc()
 
-            try:
-                _run_async(_mcp_disconnect_async())
-            except Exception:
-                pass
-
             _MCP_TOOLS = []
+
             return []
 
 
-async def _call_mcp_tool_async(tool_name, arguments):
-    """Call a tool through the persistent MCP session."""
-    session = await _mcp_connect_async()
+# ============================================================
+# MCP TOOL CALL
+# ============================================================
 
-    result = await session.call_tool(
-        tool_name,
-        arguments=arguments,
+async def _call_mcp_tool_async(
+    tool_name,
+    arguments,
+):
+    """
+    Call one MCP tool.
+
+    A fresh Streamable HTTP session is created for this call,
+    and connection, initialization, tool execution and cleanup
+    all happen inside the same asyncio event loop.
+    """
+
+    async def operation(session):
+
+        result = await session.call_tool(
+            tool_name,
+            arguments=arguments,
+        )
+
+        output = []
+
+        for content in result.content:
+
+            if hasattr(content, "text"):
+
+                try:
+                    output.append(
+                        json.loads(content.text)
+                    )
+
+                except (
+                    json.JSONDecodeError,
+                    TypeError,
+                ):
+
+                    output.append(
+                        content.text
+                    )
+
+            elif hasattr(
+                content,
+                "model_dump",
+            ):
+
+                output.append(
+                    content.model_dump()
+                )
+
+            else:
+
+                output.append(
+                    str(content)
+                )
+
+        if len(output) == 1:
+            return output[0]
+
+        return output
+
+    return await _mcp_with_session_async(
+        operation
     )
 
-    output = []
 
-    for content in result.content:
-        if hasattr(content, "text"):
-            try:
-                output.append(json.loads(content.text))
-            except (json.JSONDecodeError, TypeError):
-                output.append(content.text)
+def call_mcp_tool(
+    tool_name,
+    arguments,
+):
+    """
+    Synchronous wrapper used by the agent tool loop.
+    """
 
-        elif hasattr(content, "model_dump"):
-            output.append(content.model_dump())
-
-        else:
-            output.append(str(content))
-
-    if len(output) == 1:
-        return output[0]
-
-    return output
-
-
-def call_mcp_tool(tool_name, arguments):
-    """Synchronous wrapper used by the agent tool loop."""
     with _MCP_LOCK:
+
         try:
+
             return _run_async(
                 _call_mcp_tool_async(
                     tool_name,
@@ -242,15 +291,13 @@ def call_mcp_tool(tool_name, arguments):
             )
 
         except Exception:
-            print(
-                f"[MCP] Tool call failed: {tool_name}"
-            )
-            traceback.print_exc()
 
-            try:
-                _run_async(_mcp_disconnect_async())
-            except Exception:
-                pass
+            print(
+                f"[MCP] Tool call failed: "
+                f"{tool_name}"
+            )
+
+            traceback.print_exc()
 
             raise
 
