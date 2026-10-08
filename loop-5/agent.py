@@ -610,7 +610,10 @@ button.
 # RUN AGENT
 # =========================================================
 
-def run_agent(task, conversation_history=None):
+def run_agent(task, conversation_history=None, conversation_id=None):
+
+    # conversation_id is accepted for compatibility with app.py.
+    # The actual previous messages are supplied through conversation_history.
 
     if conversation_history is None:
         conversation_history = []
@@ -640,6 +643,7 @@ def run_agent(task, conversation_history=None):
         content = message.get("content")
 
         if role in ["user", "assistant"] and content:
+
             messages.append({
                 "role": role,
                 "content": content
@@ -650,6 +654,7 @@ def run_agent(task, conversation_history=None):
     # -----------------------------------------------------
 
     messages.append({
+
         "role":
             "user",
 
