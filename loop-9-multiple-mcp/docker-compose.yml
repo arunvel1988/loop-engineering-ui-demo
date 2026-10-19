@@ -1,0 +1,80 @@
+services:
+  demo-app:
+    build: ./app
+    container_name: demo-app
+    environment:
+      - INCIDENT_MODE=normal
+    ports:
+      - "5000:5000"
+    volumes:
+      - demo_logs:/logs
+      - demo_state:/state
+    networks: [labnet]
+
+  monitoring-mcp:
+    build: ./mcp_servers/monitoring
+    container_name: monitoring-mcp
+    environment:
+      - APP_URL=http://demo-app:5000
+    networks: [labnet]
+
+  logs-mcp:
+    build: ./mcp_servers/logs
+    container_name: logs-mcp
+    volumes:
+      - demo_logs:/logs:ro
+    networks: [labnet]
+
+  deployment-mcp:
+    build: ./mcp_servers/deployment
+    container_name: deployment-mcp
+    volumes:
+      - demo_state:/state:ro
+    networks: [labnet]
+
+  container-mcp:
+    build: ./mcp_servers/container
+    container_name: container-mcp
+    environment:
+      - APP_URL=http://demo-app:5000
+    networks: [labnet]
+
+  remediation-mcp:
+    build: ./mcp_servers/remediation
+    container_name: remediation-mcp
+    environment:
+      - APP_URL=http://demo-app:5000
+      - STATE_DIR=/state
+    volumes:
+      - demo_state:/state
+    networks: [labnet]
+
+  agent:
+    build: ./agent
+    container_name: devops-agent
+    env_file: .env
+    environment:
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - MONITORING_MCP_URL=http://monitoring-mcp:8000/mcp
+      - LOGS_MCP_URL=http://logs-mcp:8000/mcp
+      - DEPLOYMENT_MCP_URL=http://deployment-mcp:8000/mcp
+      - CONTAINER_MCP_URL=http://container-mcp:8000/mcp
+      - REMEDIATION_MCP_URL=http://remediation-mcp:8000/mcp
+      - APP_URL=http://demo-app:5000
+    ports:
+      - "8080:8080"
+    depends_on:
+      - demo-app
+      - monitoring-mcp
+      - logs-mcp
+      - deployment-mcp
+      - container-mcp
+      - remediation-mcp
+    networks: [labnet]
+
+networks:
+  labnet:
+
+volumes:
+  demo_logs:
+  demo_state:
