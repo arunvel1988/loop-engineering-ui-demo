@@ -1,1 +1,25 @@
 #####
+
+
+cp .env.example .env
+nano .env
+
+GROQ_API_KEY=your_actual_groq_api_key
+GROQ_MODEL=llama-3.3-70b-versatile
+
+docker compose up --build -d
+docker compose ps
+
+curl -X POST http://localhost:8080/simulate-incident
+
+curl -X POST http://localhost:8080/incident \
+  -H 'Content-Type: application/json' \
+  -d '{"alert":"High CPU and application errors"}'
+
+curl -X POST http://localhost:8080/approve \
+  -H 'Content-Type: application/json' \
+  -d '{"proposal_id":"YOUR_PROPOSAL_ID","approved":true}'
+
+curl http://localhost:5000/health
+
+#################################################
