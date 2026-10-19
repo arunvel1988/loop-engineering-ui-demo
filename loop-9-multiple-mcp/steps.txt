@@ -23,3 +23,18 @@ curl -X POST http://localhost:8080/approve \
 curl http://localhost:5000/health
 
 #################################################
+for c in monitoring-mcp logs-mcp deployment-mcp container-mcp remediation-mcp devops-agent; do
+  echo "========== $c =========="
+  docker logs --tail 60 "$c" 2>&1
+done
+
+##################################
+
+docker logs monitoring-mcp
+docker logs logs-mcp
+docker logs deployment-mcp
+docker logs container-mcp
+docker logs remediation-mcp
+docker logs devops-agent
+
+##############
