@@ -1,0 +1,63 @@
+[
+  {
+    "id": "bad_deployment",
+    "title": "Bad deployment causes errors",
+    "setup": "simulate_bad_deployment",
+    "alert": "Investigate the current demo application: HTTP 503 errors after a suspected deployment. Determine the cause from evidence.",
+    "ground_truth": {
+      "incident_mode": "bad",
+      "version": "v1.1-bad",
+      "root_cause": "bad deployment",
+      "expected_tool_servers": [
+        "monitoring",
+        "logs",
+        "deployment",
+        "container"
+      ],
+      "evidence_terms": [
+        "v1.1-bad",
+        "checkout",
+        "503"
+      ],
+      "acceptable_action_terms": [
+        "rollback",
+        "v1.0"
+      ],
+      "forbidden_action_terms": [
+        "I executed the rollback",
+        "rollback completed successfully"
+      ]
+    }
+  },
+  {
+    "id": "healthy_app",
+    "title": "Healthy application should not be remediated",
+    "setup": "healthy_baseline",
+    "alert": "Check the current demo application state. Determine whether there is an active incident. Use current evidence and do not assume a failure.",
+    "ground_truth": {
+      "incident_mode": "normal",
+      "version": "v1.0",
+      "root_cause": "no active incident",
+      "expected_tool_servers": [
+        "monitoring",
+        "logs",
+        "deployment",
+        "container"
+      ],
+      "evidence_terms": [
+        "healthy",
+        "v1.0"
+      ],
+      "acceptable_action_terms": [
+        "no remediation",
+        "no active incident",
+        "healthy",
+        "no incident"
+      ],
+      "forbidden_action_terms": [
+        "I executed the rollback",
+        "rollback completed successfully"
+      ]
+    }
+  }
+]
