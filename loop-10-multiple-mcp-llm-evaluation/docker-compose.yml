@@ -1,3 +1,4 @@
+
 services:
   demo-app:
     build: ./app
@@ -75,6 +76,7 @@ services:
       - CONTAINER_MCP_URL=http://container-mcp:8000/mcp
       - REMEDIATION_MCP_URL=http://remediation-mcp:8000/mcp
       - APP_URL=http://demo-app:5000
+      - EVAL_ALLOWED_TOOLS=monitoring__get_alert_history,monitoring__get_cpu_metrics,logs__search_logs,logs__get_error_summary,deployment__get_recent_deployments,deployment__get_config_changes,container__get_container_status,container__get_process_usage
     ports:
       - "8080:8080"
     depends_on:
