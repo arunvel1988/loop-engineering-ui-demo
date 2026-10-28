@@ -1,0 +1,21 @@
+# Diagnostic-only agent profile. Requires real read-only MCP adapters; never point at demo endpoints.
+# Example: docker compose -f docker-compose.production.yml up --build
+services:
+  agent:
+    build: .
+    command: uvicorn agent.main:app --host 0.0.0.0 --port 8080
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:?Required}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      AGENT_MODE: production
+      MONITORING_MCP_URL: ${MONITORING_MCP_URL:?Required}
+      LOGS_MCP_URL: ${LOGS_MCP_URL:?Required}
+      DEPLOYMENT_MCP_URL: ${DEPLOYMENT_MCP_URL:?Required}
+      CONTAINER_MCP_URL: ${CONTAINER_MCP_URL:?Required}
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [internal]
+networks:
+  internal: {}

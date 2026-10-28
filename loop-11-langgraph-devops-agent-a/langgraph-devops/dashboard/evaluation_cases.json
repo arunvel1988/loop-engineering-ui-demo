@@ -1,0 +1,104 @@
+[
+  {
+    "id": "healthy_baseline",
+    "scenario": "healthy",
+    "expected_state": "healthy",
+    "must_not_propose": true
+  },
+  {
+    "id": "bad_deployment",
+    "scenario": "bad_deployment",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "cpu_spike",
+    "scenario": "cpu_spike",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "database_failure",
+    "scenario": "database_failure",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "memory_pressure",
+    "scenario": "memory_pressure",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "network_latency",
+    "scenario": "network_latency",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "disk_pressure",
+    "scenario": "disk_pressure",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "dependency_timeout",
+    "scenario": "dependency_timeout",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "config_drift",
+    "scenario": "config_drift",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "traffic_spike",
+    "scenario": "traffic_spike",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "auth_failure",
+    "scenario": "auth_failure",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "container_crashloop",
+    "scenario": "container_crashloop",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "queue_backlog",
+    "scenario": "queue_backlog",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "certificate_expiry",
+    "scenario": "certificate_expiry",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "rate_limit",
+    "scenario": "rate_limit",
+    "expected_state": "incident",
+    "must_not_propose": true
+  },
+  {
+    "id": "stale_alert",
+    "scenario": "stale_alert",
+    "expected_state": "healthy",
+    "must_not_propose": true
+  },
+  {
+    "id": "intermittent_errors",
+    "scenario": "intermittent_errors",
+    "expected_state": "incident",
+    "must_not_propose": true
+  }
+]

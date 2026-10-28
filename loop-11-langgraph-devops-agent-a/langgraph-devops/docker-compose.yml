@@ -1,0 +1,59 @@
+services:
+  demo-app:
+    build: .
+    command: uvicorn demo.app:app --host 0.0.0.0 --port 5000
+    environment:
+      STATE_FILE: /state/state.json
+    volumes: [demo_state:/state]
+    ports: ["5000:5000"]
+    networks: [labnet]
+  monitoring-mcp: &mcp
+    build: .
+    command: python -m mcp.server
+    environment:
+      ROLE: monitoring
+      DEMO_URL: http://demo-app:5000
+    networks: [labnet]
+    depends_on: [demo-app]
+  logs-mcp:
+    <<: *mcp
+    environment: {ROLE: logs, DEMO_URL: "http://demo-app:5000"}
+  deployment-mcp:
+    <<: *mcp
+    environment: {ROLE: deployment, DEMO_URL: "http://demo-app:5000"}
+  container-mcp:
+    <<: *mcp
+    environment: {ROLE: container, DEMO_URL: "http://demo-app:5000"}
+  remediation-mcp:
+    <<: *mcp
+    environment: {ROLE: remediation, DEMO_URL: "http://demo-app:5000", APPROVAL_SECRET: "${APPROVAL_SECRET:?Set APPROVAL_SECRET in .env}"}
+  agent:
+    build: .
+    command: uvicorn agent.main:app --host 0.0.0.0 --port 8080
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY:?Set GROQ_API_KEY in .env}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
+      AGENT_MODE: demo
+      APPROVAL_SECRET: "${APPROVAL_SECRET:?Set APPROVAL_SECRET in .env}"
+      MONITORING_MCP_URL: http://monitoring-mcp:8000/mcp
+      LOGS_MCP_URL: http://logs-mcp:8000/mcp
+      DEPLOYMENT_MCP_URL: http://deployment-mcp:8000/mcp
+      CONTAINER_MCP_URL: http://container-mcp:8000/mcp
+      REMEDIATION_MCP_URL: http://remediation-mcp:8000/mcp
+    depends_on: [monitoring-mcp, logs-mcp, deployment-mcp, container-mcp, remediation-mcp]
+    ports: ["8080:8080"]
+    networks: [labnet]
+  dashboard:
+    build: .
+    command: python -m dashboard.app
+    environment:
+      AGENT_URL: http://agent:8080
+      DEMO_URL: http://demo-app:5000
+      APPROVAL_SECRET: "${APPROVAL_SECRET:?Set APPROVAL_SECRET in .env}"
+    ports: ["8081:8081"]
+    depends_on: [agent, demo-app]
+    networks: [labnet]
+volumes:
+  demo_state:
+networks:
+  labnet:
