@@ -1,0 +1,123 @@
+services:
+  demo-app:
+    build: .
+    command: uvicorn demo.app:app --host 0.0.0.0 --port 5000
+    environment: {STATE_FILE: /data/state.json}
+    volumes: [demo_state:/data]
+    ports: ["5000:5000"]
+    restart: unless-stopped
+
+  monitoring-mcp:
+    build: .
+    command: python -m mcp_servers.server
+    environment: {MCP_SERVICE: monitoring, STATE_FILE: /data/state.json}
+    volumes: [demo_state:/data]
+    restart: unless-stopped
+  logs-mcp:
+    build: .
+    command: python -m mcp_servers.server
+    environment: {MCP_SERVICE: logs, STATE_FILE: /data/state.json}
+    volumes: [demo_state:/data]
+    restart: unless-stopped
+  deployment-mcp:
+    build: .
+    command: python -m mcp_servers.server
+    environment: {MCP_SERVICE: deployment, STATE_FILE: /data/state.json}
+    volumes: [demo_state:/data]
+    restart: unless-stopped
+  container-mcp:
+    build: .
+    command: python -m mcp_servers.server
+    environment: {MCP_SERVICE: container, STATE_FILE: /data/state.json}
+    volumes: [demo_state:/data]
+    restart: unless-stopped
+  remediation-mcp:
+    build: .
+    command: python -m mcp_servers.server
+    environment: {MCP_SERVICE: remediation, STATE_FILE: /data/state.json}
+    volumes: [demo_state:/data]
+    restart: unless-stopped
+
+  monitoring-agent:
+    build: .
+    command: uvicorn agents.worker:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    environment:
+      AGENT_ROLE: monitoring
+      MONITORING_MCP_URL: http://monitoring-mcp:8000/mcp
+    depends_on: [monitoring-mcp]
+    restart: unless-stopped
+
+  logs-agent:
+    build: .
+    command: uvicorn agents.worker:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    environment:
+      AGENT_ROLE: logs
+      LOGS_MCP_URL: http://logs-mcp:8000/mcp
+    depends_on: [logs-mcp]
+    restart: unless-stopped
+
+  deployment-agent:
+    build: .
+    command: uvicorn agents.worker:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    environment:
+      AGENT_ROLE: deployment
+      DEPLOYMENT_MCP_URL: http://deployment-mcp:8000/mcp
+    depends_on: [deployment-mcp]
+    restart: unless-stopped
+
+  container-agent:
+    build: .
+    command: uvicorn agents.worker:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    environment:
+      AGENT_ROLE: container
+      CONTAINER_MCP_URL: http://container-mcp:8000/mcp
+    depends_on: [container-mcp]
+    restart: unless-stopped
+
+  commander-agent:
+    build: .
+    command: uvicorn agents.commander:app --host 0.0.0.0 --port 8000
+    env_file: [.env]
+    restart: unless-stopped
+
+  agent:
+    build: .
+    command: uvicorn agent.main:app --host 0.0.0.0 --port 8080
+    env_file: [.env]
+    environment:
+      STATE_FILE: /data/state.json
+      APP_URL: http://demo-app:5000
+      MONITORING_MCP_URL: http://monitoring-mcp:8000/mcp
+      LOGS_MCP_URL: http://logs-mcp:8000/mcp
+      DEPLOYMENT_MCP_URL: http://deployment-mcp:8000/mcp
+      CONTAINER_MCP_URL: http://container-mcp:8000/mcp
+      REMEDIATION_MCP_URL: http://remediation-mcp:8000/mcp
+      MONITORING_AGENT_URL: http://monitoring-agent:8000
+      LOGS_AGENT_URL: http://logs-agent:8000
+      DEPLOYMENT_AGENT_URL: http://deployment-agent:8000
+      CONTAINER_AGENT_URL: http://container-agent:8000
+      COMMANDER_AGENT_URL: http://commander-agent:8000
+    volumes: [demo_state:/data]
+    depends_on: [demo-app, monitoring-mcp, logs-mcp, deployment-mcp, container-mcp, remediation-mcp, monitoring-agent, logs-agent, deployment-agent, container-agent, commander-agent]
+    ports: ["8080:8080"]
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: python -m dashboard.app
+    env_file: [.env]
+    environment:
+      AGENT_URL: http://agent:8080
+      APP_URL: http://demo-app:5000
+      FLASK_HOST: 0.0.0.0
+      FLASK_PORT: "8081"
+    depends_on: [agent, demo-app]
+    ports: ["8081:8081"]
+    restart: unless-stopped
+
+volumes:
+  demo_state:
